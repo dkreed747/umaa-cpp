@@ -1,0 +1,47 @@
+---
+#---------------------------------------------------------------------------
+# Copyright 2025 Pennsylvania State University
+#
+#  Applied Research Laboratory
+#  Pennsylvania State University
+#  P.O. Box 30
+#  State College, PA 16804-0030
+#
+# DISTRIBUTION STATEMENT A. Approved for public release.
+# Distribution is unlimited.
+# This software was developed by the Department of the Navy,
+# NAVSEA Unmanned and Small Combatants. It is provided under the terms of
+# use found in the LICENSE file at the source code root directory.
+#---------------------------------------------------------------------------
+
+# DDS Settings
+dds:
+  domain-id: 0
+  domain-qos-file: "CYCLONE_QOS_PROFILES.xml"
+  domain-qos-profile: "UMAA_QoS_Library::UMAA_Base_Profile"
+  large-collections-qos-profile: "UMAA_QoS_Library::UMAA_LargeCollections_Profile"
+
+# UMAA Service IDs
+umaa-service-provider:
+  global-vector-provider-id:     "8a99bcfa-80a1-4fa5-9771-b7cba2d05cd5"
+  global-waypoint-provider-id:   "d70ec6dd-245d-4505-b20c-f8af8bdd5e7c" # UMAA Reference Impl. ID
+  global-hover-provider-id:      "676C6F62-616C-686F-7665-727365727669"
+  waypoint-large-list-id:        "4f55f423-a1a2-4c2f-814b-94a98192bf8d"
+  navigation-component-id:       "52b00ff4-88c5-4bbe-ae9e-05abc5ffdfda"
+  c2-sim-id:                     "6175746f-6672-616d-6577-6f726b000000"
+  mission-execution-manager-id:  "4079f07e-8fb2-4b04-8ea2-215fd62c147f"
+  route-objective-executor-id:   "526f7574-654f-626a-4578-656375746f72"
+  health-report-service-id:      "4865616c-7468-5072-6F76-696465724944"
+
+vehicle:
+  surface-capability:
+    maxAcceleration: 1.0
+    maxDeceleration: 1.0
+    maxForwardSpeed: 2.0
+    maxReverseSpeed: 0.5
+    maxTurnRate: 2.0
+    maxTurnAcceleration: 1.0
+    minSpeedInMedium: 0.0
+    recommendedAcceleration: 0.5
+    recommendedSpeed: 2.0
+    recommendedTurnRate: 1.0

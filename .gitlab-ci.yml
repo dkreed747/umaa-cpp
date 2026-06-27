@@ -1,0 +1,163 @@
+---
+#---------------------------------------------------------------------------
+#  Copyright 2025 Pennsylvania State University
+#
+#  Applied Research Laboratory
+#  Pennsylvania State University
+#  P.O. Box 30
+#  State College, PA 16804-0030
+#
+# DISTRIBUTION STATEMENT A. Approved for public release.
+# Distribution is unlimited.
+# This software was developed by the Department of the Navy,
+# NAVSEA Unmanned and Small Combatants. It is provided under the terms of
+# use found in the LICENSE file at the source code root directory.
+#---------------------------------------------------------------------------
+
+## Include built-in GitLab secret detection scanner.
+include:
+  - project: "${RAIL_COMMON_CI_CD_PATH}"
+    ref: "${RAIL_TEMPLATE_VERSION}"
+    file:
+      - "/pipelines/cpp-pipeline.yml"
+      - "/jobs/containerize/containerize-podman.yml"
+      - "/jobs/static-analysis/sonarqube-report.yml"
+      - "/jobs/lint/lint-cpplint.yml"
+
+## Stages outline what order jobs should be run in the pipeline.
+# Jobs run in the same stage run in parallel, as long as they have the resources to do so.
+stages:
+  - secret-detection
+  - lint
+  - build
+  - test
+  - static-analysis
+  - oqe
+  - containerize
+  - publish
+
+
+## Variables defined for the pipeline.
+# Others variables available on the group and project levels.
+variables:
+  DOCKER_LINT_FLAGS: "--failure-threshold warning"
+  PROJECT_KEY: "umaa-sdk-common"
+  RAIL_PIPELINE_DEBUG: "false"
+  UMAA_VERSION: "6.0"
+  # Default tag value that will be overwritten by pipeline rules.
+  #################### Image Build Information #################################
+  BASE_REGISTRY: "${CI_REGISTRY}/${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}"
+  IMAGE_NAME: "${BASE_REGISTRY}/umaa-sdk-common"
+  ##############################################################################
+  CONTAINER_FILE: "./ci/umaa-sdk-common.Dockerfile"
+  TEST_BUILD_DIR: test-build
+  DEV_IMAGE: "${CI_REGISTRY}/peo-usc/pms406/rail/projects/umaa/umaa-sdk/umaa-cyclone-cxx-types/umaa-cyclone-cxx-types/dev"
+  DEV_IMAGE_TAG: "latest"
+  TEST_BUILD_DIR: test-build
+
+## Set Pipeline defaults
+default:
+  image: ${DEV_IMAGE}:${DEV_IMAGE_TAG}
+  interruptible: true
+
+lint-code:
+  extends: .lint-cpplint
+  variables:
+    LINT_ARGS: "--filter=-builder/c++11 --linelength=120 --output=junit --recursive include src --quiet"
+  allow_failure: true
+
+# Job build the software that is checked into the baseline.
+build:
+  stage: build
+  tags:
+    - dedicated
+  needs:
+    - lint-code
+  script:
+    - mkdir -p $TEST_BUILD_DIR
+    - cmake -B $TEST_BUILD_DIR -DCMAKE_BUILD_TYPE=Debug -Wdev -DTEST_COMMON=0 -DCODE_COVERAGE=0 -DTEST_CYCLONE=0
+
+# Job to test the built software. Using the dependencies clause the build that was made in the build job will be reused.
+unit-test:
+  stage: test
+  tags:
+    - dedicated
+  dependencies:
+    - build
+  script:
+    - export GTEST_COLOR=1
+    - mkdir -p $TEST_BUILD_DIR
+    - cmake -B $TEST_BUILD_DIR -DCMAKE_BUILD_TYPE=Debug -Wdev -DTEST_COMMON=1 -DCODE_COVERAGE=0 -DTEST_CYCLONE=1
+    - pushd $TEST_BUILD_DIR
+    - make -j$(nproc)
+    - ctest --verbose
+    - popd
+  artifacts:
+    paths:
+      - "${TEST_BUILD_DIR}/test/test-reports/*.xml"
+    reports:
+      junit:
+        - "${TEST_BUILD_DIR}/test/test-reports/*.xml"
+
+# Source Code Static Analysis Stage
+# SONAR_TOKEN and SONAR_HOST_URL must be defined as a CI/CD variable
+sonarqube-check:
+  stage: static-analysis
+  needs:
+    - unit-test
+  variables:
+    SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar" # Defines the location of the analysis task cache
+    GIT_DEPTH: "0" # Tells git to fetch all the branches of the project, required by the analysis task
+    SONAR_VERSION: 6.1.0.4477
+    SONAR_SCANNER: sonar-scanner-${SONAR_VERSION}-linux-x64
+    SONAR_SCANNER_CLI_ZIP: "sonar-scanner-cli-${SONAR_VERSION}-linux-x64.zip"
+    GIT_CLEAN_FLAGS: none
+  script:
+    - microdnf install -y unzip
+    - mkdir -p oqe/.sonar
+    # Get Build Wrapper
+    - 'curl -SLo build-wrapper-linux-x86.zip ${SONAR_HOST_URL}/static/cpp/build-wrapper-linux-x86.zip'
+    - ls -l build-wrapper-linux-x86.zip
+    - unzip -o build-wrapper-linux-x86.zip -d oqe/.sonar
+    # Get Sonar Scanner
+    - curl -v -SLo sonar-scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/${SONAR_SCANNER_CLI_ZIP}
+    - ls -l sonar-scanner.zip
+    - unzip -o sonar-scanner.zip -d oqe/.sonar
+    - ls -l oqe/.sonar
+    # Build the code
+    - mkdir -p $TEST_BUILD_DIR
+    - cmake -B $TEST_BUILD_DIR -DCMAKE_BUILD_TYPE=Debug -Wdev -DTEST_COMMON=1 -DCODE_COVERAGE=1 -DTEST_CYCLONE=1
+    - pushd $TEST_BUILD_DIR
+    - ../oqe/.sonar/build-wrapper-linux-x86/build-wrapper-linux-x86-64 --out-dir ./sonar_wrapper_out make -j$(nproc)
+    - ctest --verbose
+    - popd
+    - ./scripts/run_gcov.sh $TEST_BUILD_DIR
+    - ./oqe/.sonar/${SONAR_SCANNER}/bin/sonar-scanner -Dsonar.host.url=${SONAR_HOST_URL} -Dsonar.cfamily.compile-commands=${TEST_BUILD_DIR}/sonar_wrapper_out/compile_commands.json -Dsonar.projectBaseDir=${CI_PROJECT_DIR} -Dsonar.token=${SONAR_TOKEN} -Dsonar.cfamily.gcov.reportsPath=${CI_PROJECT_DIR}/gcov-reports
+  artifacts:
+    paths:
+      - "${TEST_BUILD_DIR}/test-reports/*.xml"
+      - "${TEST_BUILD_DIR}/sonar_wrapper_out/**"
+      - gcov-reports/**
+  allow_failure: true
+
+sonarqube-report:
+  extends: .sonarqube-report
+
+image-build:
+  extends:
+    - .build-container-podman
+  tags:
+    - dedicated
+
+update-parent-submodules:
+  stage: publish
+  image: ${IRON_BANK_REGISTRY}/opensource/python:v3.11.8
+  tags:
+    - dedicated
+  script:
+    - pip3 install python-gitlab
+    - python3 ci/scripts/UpdateParentProjects.py --url ${CI_SERVER_URL} --token ${RAIL_TEMPLATE_TOKEN}
+  rules:
+      # Only run job when a push has been made to main
+    - if: '$CI_COMMIT_REF_NAME == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"'
+      when: on_success

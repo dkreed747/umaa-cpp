@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  ~ Copyright 2025 Pennsylvania State University
+  ~
+  ~ Applied Research Laboratory
+  ~ Pennsylvania State University
+  ~ P.O. Box 30
+  ~ State College, PA 16804-0030
+  ~
+  ~ DISTRIBUTION STATEMENT A. Approved for public release.
+  ~ Distribution is unlimited.
+  ~ This software was developed by the Department of the Navy,
+  ~ NAVSEA Unmanned and Small Combatants. It is provided under the terms of
+  ~ use found in the LICENSE file at the source code root directory.
+  ~
+  -->
+
+<log4j:configuration xmlns:log4j="http://jakarta.apache.org/log4j/">
+  <appender name="ConsoleAppender" class="org.apache.log4j.ConsoleAppender">
+    <param name="Target" value="System.out"/>
+    <layout class="org.apache.log4j.PatternLayout">
+      <param name="ConversionPattern" value="[%p] %d{HH:mm:ss.SSSS} %M - %m%n"/>
+    </layout>
+  </appender>
+
+  <root>
+    <!-- SET LOG LEVEL HERE -->
+    <!-- OPTIONS: trace, debug, info, warn, error, fatal -->
+    <priority value="info" />
+    <appender-ref ref="ConsoleAppender"/>
+  </root>
+</log4j:configuration>

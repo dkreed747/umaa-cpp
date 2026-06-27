@@ -1,0 +1,32 @@
+{
+    "configurations": [
+        {
+            "name": "route-objective-executor",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "/usr/local/umaa-6.0/**",
+                "/usr/local/include",
+                "/usr/local/include/ddscxx/**",
+                "${workspaceFolder}/test/io/dds/util",
+                "${workspaceFolder}/include/**"
+            ],
+            "compileCommands": "${workspaceFolder}/build/compile_commands.json",
+            "defines": [],
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "gnu17",
+            "cppStandard": "gnu++20",
+            "intelliSenseMode": "linux-gcc-x64",
+            "configurationProvider": "ms-vscode.cmake-tools",
+            "browse": {
+                "path": [
+                    "${workspaceFolder}",
+                    "/usr/local/include/ddscxx/**",
+                    "/usr/local/umaa-6.0/**"
+                ],
+                "limitSymbolsToIncludedHeaders": true,
+                "databaseFilename": ""
+            }
+        }
+    ],
+    "version": 4
+}

@@ -1,0 +1,25 @@
+# https://clang.llvm.org/docs/ClangFormatStyleOptions.html
+Language: Cpp
+BasedOnStyle: Google
+
+BinPackArguments: false
+BinPackParameters: false
+ColumnLimit: 120
+IncludeCategories:
+  # https://google.github.io/styleguide/cppguide.html#Names_and_Order_of_Includes
+  # Priority 0 is the main header for a source file.
+  # C system headers
+  - Regex: <.*\.h>
+    Priority: 1
+  # C++ system headers
+  - Regex: <[[:alnum:]_]+>
+    Priority: 2
+  # Other system headers
+  - Regex: <.*>
+    Priority: 3
+  # Local headers
+  - Regex: \".*\"
+    Priority: 4
+InsertNewlineAtEOF: true
+MaxEmptyLinesToKeep: 2
+SpacesBeforeTrailingComments: 2

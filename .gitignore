@@ -1,0 +1,7 @@
+build/
+.vscode/tasks.json
+.idea/
+cmake-build-debug/
+cmake-build-release/
+cmake-build-debug-docker/
+!.idea/copyright/

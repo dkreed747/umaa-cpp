@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ~ Copyright 2025 Pennsylvania State University
+  ~
+  ~ Applied Research Laboratory
+  ~ Pennsylvania State University
+  ~ P.O. Box 30
+  ~ State College, PA 16804-0030
+  ~
+  ~ DISTRIBUTION STATEMENT A. Approved for public release.
+  ~ Distribution is unlimited.
+  ~ This software was developed by the Department of the Navy,
+  ~ NAVSEA Unmanned and Small Combatants. It is provided under the terms of
+  ~ use found in the LICENSE file at the source code root directory.
+  ~
+  -->
+
+<!-- XML Configuration File Reference: -->
+<!-- https://github.com/eclipse-cyclonedds/cyclonedds/blob/master/docs/manual/about_dds/qos_provider.rst -->
+<dds xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.arl.psu.edu/DDS-XML-QoS" xsi:schemaLocation="http://www.omg.org/spec/DDS-XML http://www.omg.org/spec/DDS-XML/20180501/dds-xml_qos_definitions.xsd">
+    <qos_library name="UMAA_QoS_Library">
+        <qos_profile name="DefaultQosProfile">
+            <publisher_qos>
+                <presentation>
+                    <access_scope>TOPIC_PRESENTATION_QOS</access_scope>
+                    <coherent_access>false</coherent_access>
+                    <ordered_access>true</ordered_access>
+                </presentation>
+            </publisher_qos>
+            <subscriber_qos>
+                <presentation>
+                    <access_scope>TOPIC_PRESENTATION_QOS</access_scope>
+                    <coherent_access>false</coherent_access>
+                    <ordered_access>false</ordered_access>
+                </presentation>
+            </subscriber_qos>
+            <datawriter_qos>
+                <destination_order>
+                    <kind>BY_SOURCE_TIMESTAMP_DESTINATIONORDER_QOS</kind>
+                </destination_order>
+            </datawriter_qos>
+            <datareader_qos>
+                <history>
+                    <kind>KEEP_LAST_HISTORY_QOS</kind>
+                    <depth>5</depth>
+                </history>
+            </datareader_qos>
+        </qos_profile>
+        <!-- EMPTY TEST PROFILE -->
+        <qos_profile name="EmptyProfile">
+        </qos_profile>
+    </qos_library>
+</dds>
