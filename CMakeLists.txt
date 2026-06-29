@@ -177,6 +177,12 @@ if(TEST_COMMON OR TEST_CYCLONE)
   add_subdirectory(test)
 endif()
 
+# Autopilot application (apps/autopilot). Built when BUILD_AUTOPILOT_APP is ON.
+option(BUILD_AUTOPILOT_APP "Build the autopilot application under apps/autopilot" ON)
+if(BUILD_AUTOPILOT_APP)
+  add_subdirectory(apps/autopilot)
+endif()
+
 if(CODE_COVERAGE)
   set(TEST_LIBS ${TEST_LIBS} gcov)
   set(COMPILE_OPTS ${COMPILE_OPTS} -fprofile-arcs -ftest-coverage)
