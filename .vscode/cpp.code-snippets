@@ -1,0 +1,35 @@
+{
+  "License header — UMAA base / mixed file": {
+    "scope": "cpp,c",
+    "prefix": "cprt",
+    "description": "Header for files that contain or derive from the UMAA IDL base (TOU flow-down + author's MIT modifications).",
+    "body": [
+      "// SPDX-License-Identifier: LicenseRef-UMAA-IDL-TOU",
+      "//",
+      "// This file contains or derives from the UMAA IDL Software and Data,",
+      "// released under Distribution Statement A and governed by the UMAA IDL",
+      "// Software Terms of Use Agreement, which flows down to all recipients",
+      "// (TOU Article 3.1). See LICENSE at the project root (Part B) for the",
+      "// full agreement.",
+      "//",
+      "// Where separable, the author's modifications in this file are",
+      "// Copyright (c) ${1:2026} ${2:Your Legal Name} and offered under MIT",
+      "// (LICENSE Part A, Section A.4). The MIT grant does not extend to the",
+      "// UMAA base.",
+      "$0"
+    ]
+  },
+  "License header — original work (MIT only)": {
+    "scope": "cpp,c",
+    "prefix": "cprtme",
+    "description": "Header for files that are wholly the author's original work, licensed MIT.",
+    "body": [
+      "// SPDX-License-Identifier: MIT",
+      "// Copyright (c) ${1:2026} ${2:Your Legal Name}",
+      "//",
+      "// Original work, part of umaa-cpp. Licensed under the MIT License.",
+      "// See LICENSE at the project root (Part A, Section A.4).",
+      "$0"
+    ]
+  }
+}
