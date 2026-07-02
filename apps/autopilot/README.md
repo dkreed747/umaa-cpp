@@ -87,3 +87,10 @@ runs green with `ctest`. An end-to-end waypoint mission over Cyclone DDS is exer
 `tools/mission_runner` (see `tools/README.md`), which publishes a `GlobalWaypointCommandType`
 plus its large-list route, records the vehicle track from the Global Pose reports, and exits
 when the command completes.
+
+A recorded end-to-end run (5-waypoint closed loop, sim vehicle at 3 m/s over Cyclone DDS on
+one host, command reached COMPLETED in 597 s with no misses or replans) lives in
+`docs/mission-results/`: the track/waypoint CSVs, the command status log, and the rendered
+plot below.
+
+![Recorded waypoint mission](docs/mission-results/mission_plot.png)

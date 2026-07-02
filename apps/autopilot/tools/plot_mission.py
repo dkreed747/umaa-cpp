@@ -80,11 +80,11 @@ def main():
     ax.plot(wp_e, wp_n, linestyle="--", color="#9c6b4e", linewidth=1.0, alpha=0.7,
             label="planned route (waypoint order)", zorder=2)
     for i, (e, n, r) in enumerate(zip(wp_e, wp_n, wp_r)):
-        ax.add_patch(plt.Circle((e, n), r, facecolor="none", edgecolor="#efb118",
+        ax.add_patch(plt.Circle((e, n), r, facecolor="none", edgecolor="#a3770a",
                                 linewidth=1.4, zorder=4))
         ax.annotate(f"WP{i + 1}", (e, n), textcoords="offset points", xytext=(8, 8),
                     fontsize=10, color="#6f6f6f")
-    ax.plot([], [], color="#efb118", label="capture radius")
+    ax.plot([], [], color="#a3770a", label="capture radius")
     ax.set_xlabel("east (m)")
     ax.set_ylabel("north (m)")
     ax.set_title("Ground track vs planned waypoints")
