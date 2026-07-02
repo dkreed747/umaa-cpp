@@ -18,6 +18,7 @@
 
 #include <cmath>
 #include <optional>
+#include <vector>
 
 #include "GeographicUtils.h"
 #include "Logger.h"
@@ -79,6 +80,8 @@ void AutopilotBrain::setVectorSetpoint(
   activeVector_ = cmd;
   mode_ = DriveSource::VECTOR;
   vectorProgress_ = VectorProgress{};
+  vectorEverAchieved_ = false;
+  vectorViolationSince_.reset();
   UMAA_LOG_INFO(util::SYSTEM_LOGGER, "Autopilot brain: vector setpoint installed")
 }
 
@@ -102,8 +105,33 @@ void AutopilotBrain::clearSetpoint(DriveSource src) {
   std::lock_guard<std::mutex> lock(mtx_);
   if (mode_ == src) {
     mode_ = DriveSource::NONE;
-    UMAA_LOG_INFO(util::SYSTEM_LOGGER, "Autopilot brain: setpoint cleared")
+    // Bring the vehicle to a stop: without this a canceled/failed/preempted command would
+    // leave the platform driving on the last setpoint forever.
+    const std::optional<GlobalPoseReportType> pose = nav_->pose();
+    ControlVector hold;
+    hold.headingRad = pose.has_value() ? pose->attitude().yaw().yaw() : 0.0;
+    hold.speedMps = 0.0;
+    vehicle_->sendControlVector(hold);
+    UMAA_LOG_INFO(util::SYSTEM_LOGGER, "Autopilot brain: setpoint cleared; commanding zero-speed hold")
   }
+}
+
+void AutopilotBrain::enforceNavStaleness() {
+  std::lock_guard<std::mutex> lock(mtx_);
+  if (mode_ == DriveSource::NONE) {
+    return;
+  }
+  const std::optional<int64_t> ageMs = nav_->poseAgeMs();
+  if (!ageMs.has_value() || ageMs.value() <= config_.loop.navStalenessTimeoutMs) {
+    return;
+  }
+  const std::optional<GlobalPoseReportType> pose = nav_->pose();
+  ControlVector hold;
+  hold.headingRad = pose.has_value() ? pose->attitude().yaw().yaw() : 0.0;
+  hold.speedMps = 0.0;
+  vehicle_->sendControlVector(hold);
+  UMAA_LOG_WARN(util::SYSTEM_LOGGER, "Navigation stale (" << ageMs.value()
+    << " ms > " << config_.loop.navStalenessTimeoutMs << " ms); commanding zero-speed hold")
 }
 
 void AutopilotBrain::onNavUpdate() {
@@ -148,21 +176,36 @@ void AutopilotBrain::updateVectorControl(const GlobalPoseReportType& pose) {
   // Achieved-flag evaluation against the commanded tolerances (or configured defaults).
   VectorProgress prog;
   prog.valid = true;
-  const double dirTol = (dir.has_value() && dir->toleranceRad.has_value()) ? dir->toleranceRad.value()
-                                                                           : config_.vectorTolerances.directionRad;
   prog.directionAchieved = dir.has_value() &&
-      std::fabs(arlcore::Unwind(poseYaw - cv.headingRad)) <= dirTol;
+      tolerance::directionAchieved(dir.value(), poseYaw, config_.vectorTolerances.directionRad);
 
-  const double speedTol = (sp.has_value() && sp->toleranceMps.has_value()) ? sp->toleranceMps.value()
-                                                                           : config_.vectorTolerances.speedMps;
-  prog.speedAchieved = std::fabs(nav_->groundSpeedMps() - cv.speedMps) <= speedTol;
+  prog.speedAchieved = sp.has_value() &&
+      tolerance::speedAchieved(sp.value(), nav_->groundSpeedMps(), config_.vectorTolerances.speedMps);
 
   if (elev.has_value()) {
     const std::optional<double> cur = poseElevation(pose, elev->frame);
-    const double elevTol = elev->toleranceM.value_or(config_.vectorTolerances.elevationM);
-    prog.elevationAchieved = cur.has_value() && std::fabs(cur.value() - elev->valueM) <= elevTol;
+    prog.elevationAchieved = cur.has_value() &&
+        tolerance::elevationAchieved(elev.value(), cur.value(), config_.vectorTolerances.elevationM);
   } else {
     prog.elevationAchieved = true;
+  }
+
+  // Hard tolerances: after all criteria have been achieved once, a violation persisting
+  // longer than the configured failure delay fails the command (UMAA failureDelay semantics).
+  const bool allAchieved = prog.directionAchieved && prog.speedAchieved && prog.elevationAchieved;
+  if (allAchieved) {
+    vectorEverAchieved_ = true;
+    vectorViolationSince_.reset();
+  } else if (config_.vectorTolerances.hard && vectorEverAchieved_) {
+    const auto now = std::chrono::steady_clock::now();
+    if (!vectorViolationSince_.has_value()) {
+      vectorViolationSince_ = now;
+    } else if (std::chrono::duration<double>(now - vectorViolationSince_.value()).count() >
+               config_.vectorTolerances.failureDelayS) {
+      prog.hardViolation = true;
+      UMAA_LOG_WARN(util::SYSTEM_LOGGER, "Vector command hard tolerance violated for more than "
+        << config_.vectorTolerances.failureDelayS << " s")
+    }
   }
 
   vectorProgress_ = prog;
@@ -174,7 +217,8 @@ void AutopilotBrain::updateWaypointControl(const GlobalPoseReportType& pose) {
 
   WaypointProgress prog = planner_.progress();
   // The planner does not see speed; evaluate speed achievement here from the nav fix.
-  prog.speedAchieved = std::fabs(nav_->groundSpeedMps() - cv.speedMps) <= config_.vectorTolerances.speedMps;
+  prog.groundSpeedMps = nav_->groundSpeedMps();
+  prog.speedAchieved = std::fabs(prog.groundSpeedMps - cv.speedMps) <= config_.vectorTolerances.speedMps;
   waypointProgress_ = prog;
 }
 

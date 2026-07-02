@@ -16,7 +16,12 @@
 
 #include "WaypointControlServiceProvider.h"
 
+#include <algorithm>
+#include <cmath>
+#include <memory>
 #include <optional>
+#include <string>
+#include <vector>
 
 #include "LargeList.h"
 #include "Logger.h"
@@ -29,6 +34,18 @@ using arlcore::umaa::services::CommandStateResult;
 using arlcore::umaa::services::IncomingCommandBehavior;
 using arlcore::umaa::LargeListStatus;
 using UMAA::MO::GlobalWaypointControl::GlobalWaypointType;
+
+namespace {
+//! \brief A DateTime `secondsAhead` seconds in the future (clamped to now for non-finite or
+//! negative inputs).
+UMAA::Common::Measurement::DateTime timestampPlus(double secondsAhead) {
+  UMAA::Common::Measurement::DateTime t = arlcore::umaa::getTimestamp();
+  if (std::isfinite(secondsAhead) && secondsAhead > 0.0) {
+    t.seconds() += static_cast<int64_t>(secondsAhead);
+  }
+  return t;
+}
+}  // namespace
 
 WaypointControlServiceProvider::WaypointControlServiceProvider(
     const arlcore::NumericGuid& source, std::shared_ptr<WaypointControlServiceProviderIo> io,
@@ -48,8 +65,6 @@ void WaypointControlServiceProvider::resetPlanningState() {
   acquired_ = false;
   planned_ = false;
   listWaitCycles_ = 0;
-  hasFailReason_ = false;
-  pendingFailReason_ = CommandStatusReasonEnumType::SUCCEEDED;
 }
 
 void WaypointControlServiceProvider::relinquish(const std::weak_ptr<CmdSession> session) {
@@ -62,6 +77,27 @@ void WaypointControlServiceProvider::relinquish(const std::weak_ptr<CmdSession> 
   sessionActive_ = false;
 }
 
+CommandStateResult WaypointControlServiceProvider::failInCommanded(
+    const std::weak_ptr<CmdSession> session, CommandStatusReasonEnumType reason,
+    const std::string& logMessage) {
+  auto s = session.lock();
+  if (!s) {
+    return CommandStateResult::ERROR;
+  }
+  // Fail directly from COMMANDED: reasons like RESOURCE_REJECTED are only legal from this
+  // state (CommandStateMachine), so they cannot be routed through isCommandFailed() in
+  // EXECUTING. The base reaps the session once it observes the FAILED state.
+  if (!s->fail(reason)) {
+    UMAA_LOG_ERROR(util::SYSTEM_LOGGER, "Unable to fail waypoint session " << s->getSessionId()
+      << " with reason " << reason)
+    return CommandStateResult::ERROR;
+  }
+  relinquish(session);
+  s->sendStatus(logMessage);
+  s->sendExecutionStatus();
+  return CommandStateResult::OK;
+}
+
 bool WaypointControlServiceProvider::validateWaypoints(
     const std::vector<GlobalWaypointType>& waypoints) const {
   if (waypoints.empty()) {
@@ -69,7 +105,14 @@ bool WaypointControlServiceProvider::validateWaypoints(
   }
   for (const GlobalWaypointType& wp : waypoints) {
     const std::optional<SpeedValue> sp = tolerance::extractSpeed(wp.speed());
-    if (sp.has_value() && maxForwardSpeedMps_ > 0.0 && sp->speedMps > maxForwardSpeedMps_) {
+    if (!sp.has_value()) {
+      // RECOMMENDED / TIME-WITH-SPEED variants are unsupported: accepting them would drive
+      // the route at 0 m/s and hang the command in EXECUTING.
+      UMAA_LOG_ERROR(util::SYSTEM_LOGGER, "Waypoint speed variant is unsupported (require a "
+        "REQUIRED ground/water speed)")
+      return false;
+    }
+    if (maxForwardSpeedMps_ > 0.0 && sp->speedMps > maxForwardSpeedMps_) {
       UMAA_LOG_ERROR(util::SYSTEM_LOGGER, "Waypoint speed " << sp->speedMps
         << " exceeds platform max forward speed " << maxForwardSpeedMps_)
       return false;
@@ -100,9 +143,8 @@ CommandStateResult WaypointControlServiceProvider::onCommanded(const std::weak_p
 
   // Lost the resource to a higher-priority (vector) command while we were setting up.
   if (acquired_ && autopilot_->arbiter().wasRevoked(DriveSource::WAYPOINT)) {
-    pendingFailReason_ = CommandStatusReasonEnumType::INTERRUPTED;
-    hasFailReason_ = true;
-    return CommandStateResult::ADVANCE;
+    return failInCommanded(session, CommandStatusReasonEnumType::INTERRUPTED,
+                           "Preempted by a higher-priority driving command");
   }
 
   // Acquire the (low-priority) driving resource. Denied if a vector command holds it.
@@ -110,9 +152,8 @@ CommandStateResult WaypointControlServiceProvider::onCommanded(const std::weak_p
     if (autopilot_->arbiter().acquire(DriveSource::WAYPOINT)) {
       acquired_ = true;
     } else {
-      pendingFailReason_ = CommandStatusReasonEnumType::RESOURCE_REJECTED;
-      hasFailReason_ = true;
-      return CommandStateResult::ADVANCE;  // fail fast in EXECUTING with the precise reason
+      return failInCommanded(session, CommandStatusReasonEnumType::RESOURCE_REJECTED,
+                             "Driving resource is held by a higher-priority command");
     }
   }
 
@@ -126,14 +167,14 @@ CommandStateResult WaypointControlServiceProvider::onCommanded(const std::weak_p
         waypoints.assign(locked->begin(), locked->end());
       }
       if (!validateWaypoints(waypoints)) {
-        pendingFailReason_ = CommandStatusReasonEnumType::VALIDATION_FAILED;
-        hasFailReason_ = true;
-        return CommandStateResult::ADVANCE;
+        // VALIDATION_FAILED is only legal from ISSUED, but the route content is not known
+        // until the large list arrives here in COMMANDED; SERVICE_FAILED is the legal reason.
+        return failInCommanded(session, CommandStatusReasonEnumType::SERVICE_FAILED,
+                               "Waypoint route failed validation");
       }
       if (!autopilot_->setWaypointSetpoint(waypoints)) {
-        pendingFailReason_ = CommandStatusReasonEnumType::SERVICE_FAILED;
-        hasFailReason_ = true;
-        return CommandStateResult::ADVANCE;
+        return failInCommanded(session, CommandStatusReasonEnumType::SERVICE_FAILED,
+                               "No navigation fix available to plan the route");
       }
       planned_ = true;
       return CommandStateResult::ADVANCE;
@@ -142,9 +183,8 @@ CommandStateResult WaypointControlServiceProvider::onCommanded(const std::weak_p
     // List not yet complete: stay in COMMANDED and retry, up to the wait budget.
     if (++listWaitCycles_ > maxListWaitCycles_) {
       UMAA_LOG_ERROR(util::SYSTEM_LOGGER, "Timed out waiting for waypoint list to complete")
-      pendingFailReason_ = CommandStatusReasonEnumType::SERVICE_FAILED;
-      hasFailReason_ = true;
-      return CommandStateResult::ADVANCE;
+      return failInCommanded(session, CommandStatusReasonEnumType::SERVICE_FAILED,
+                             "Timed out waiting for the waypoint list to complete");
     }
     return CommandStateResult::OK;
   }
@@ -153,14 +193,16 @@ CommandStateResult WaypointControlServiceProvider::onCommanded(const std::weak_p
 }
 
 CommandStateResult WaypointControlServiceProvider::onExecuting(const std::weak_ptr<CmdSession> session) {
-  // The brain drives off each navigation packet; keep the command executing. Failure (reject /
-  // interrupt / objective failure) is surfaced via isCommandFailed.
+  // The brain drives off each navigation packet; keep the command executing. Failure (revoked
+  // resource / objective failure) is surfaced via isCommandFailed.
   return CommandStateResult::OK;
 }
 
 bool WaypointControlServiceProvider::onUpdated(const std::weak_ptr<CmdSession> session,
     const GlobalWaypointCommandType& previousCmd, const GlobalWaypointCommandType& updatedCmd) {
-  // Treat an update as a new route: replan from the (possibly updated) list next cycle.
+  // Treat an update as a new route: drop the previous large list and replan from the
+  // (possibly updated) list next cycle. The driving resource is kept.
+  listReader_.removeListByMetadata(previousCmd.waypointsListMetadata());
   planned_ = false;
   listWaitCycles_ = 0;
   return true;
@@ -174,9 +216,6 @@ CommandStatusReasonEnumType WaypointControlServiceProvider::isCommandFailed(
     const std::weak_ptr<CmdSession> session) {
   if (autopilot_->arbiter().wasRevoked(DriveSource::WAYPOINT)) {
     return CommandStatusReasonEnumType::INTERRUPTED;
-  }
-  if (hasFailReason_) {
-    return pendingFailReason_;
   }
   if (planned_ && autopilot_->waypointProgress().failed) {
     return CommandStatusReasonEnumType::OBJECTIVE_FAILED;
@@ -208,9 +247,10 @@ SendStatus WaypointControlServiceProvider::sendExecutionStatus(const GlobalWaypo
   report.cumulativeDistance() = prog.cumulativeDistanceM;
   report.waypointsRemaining() = prog.waypointsRemaining;
   report.waypointID() = prog.waypointId.getGuid();
-  // arrivalTime / timeToWaypoint estimation is left to a future iteration; stamp with now.
-  report.arrivalTime() = arlcore::umaa::getTimestamp();
-  report.timeToWaypoint() = arlcore::umaa::getTimestamp();
+  // ETA estimates from the current ground speed (fall back to "now" when not moving).
+  const double speed = std::max(prog.groundSpeedMps, 0.1);
+  report.timeToWaypoint() = timestampPlus(prog.distanceToWaypointM / speed);
+  report.arrivalTime() = timestampPlus(prog.distanceRemainingM / speed);
   return io_->cmdExeStatusSender.value()->send(report);
 }
 

@@ -16,6 +16,8 @@
 
 #include "VectorControlServiceProvider.h"
 
+#include <memory>
+
 #include "Logger.h"
 #include "ToleranceUtils.h"
 #include "UmaaUtils.h"
@@ -55,6 +57,10 @@ bool VectorControlServiceProvider::isCommandValid(const GlobalVectorCommandType&
   if (maxForwardSpeedMps_ > 0.0 && speed->speedMps > maxForwardSpeedMps_) {
     UMAA_LOG_ERROR(util::SYSTEM_LOGGER, "Vector command speed " << speed->speedMps
       << " exceeds platform max forward speed " << maxForwardSpeedMps_)
+    return false;
+  }
+  if (cmd.endTime().has_value() && arlcore::umaa::getTimestamp() > cmd.endTime().value()) {
+    UMAA_LOG_ERROR(util::SYSTEM_LOGGER, "Vector command endTime is already in the past")
     return false;
   }
   return true;
@@ -105,6 +111,9 @@ CommandStatusReasonEnumType VectorControlServiceProvider::isCommandFailed(
     const std::weak_ptr<CmdSession> session) {
   if (autopilot_->arbiter().wasRevoked(DriveSource::VECTOR)) {
     return CommandStatusReasonEnumType::INTERRUPTED;
+  }
+  if (autopilot_->vectorProgress().hardViolation) {
+    return CommandStatusReasonEnumType::OBJECTIVE_FAILED;
   }
   return CommandStatusReasonEnumType::SUCCEEDED;
 }

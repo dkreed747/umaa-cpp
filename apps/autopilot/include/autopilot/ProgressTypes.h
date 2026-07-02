@@ -31,6 +31,7 @@ struct VectorProgress {
   bool directionAchieved = false;
   bool elevationAchieved = true;  // true when no elevation was requested
   bool speedAchieved = false;
+  bool hardViolation = false;    // hard tolerances: violated persistently after being achieved
 };
 
 //! \brief Per-tick capture evaluation for the current target waypoint.
@@ -51,7 +52,8 @@ struct WaypointProgress {
   bool elevationAchieved = true;
   bool speedAchieved = false;
   bool trackLineAchieved = true;          // true when no trackTolerance requested
-  std::optional<double> crossTrackErrorM; // set only when trackTolerance is defined
+  std::optional<double> crossTrackErrorM;  // set only when trackTolerance is defined
+  double groundSpeedMps = 0.0;            // current ground speed (for ETA estimation)
   double distanceToWaypointM = 0.0;
   double distanceRemainingM = 0.0;
   double cumulativeDistanceM = 0.0;

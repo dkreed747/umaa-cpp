@@ -18,6 +18,7 @@
 #define APPS_AUTOPILOT_INCLUDE_AUTOPILOT_WAYPOINTCONTROLSERVICEPROVIDER_H_
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "CommandProviderBase.h"
@@ -61,6 +62,12 @@ class WaypointControlServiceProvider : public arlcore::umaa::services::CommandPr
  private:
   void resetPlanningState();
   void relinquish(const std::weak_ptr<CmdSession> session);
+
+  //! \brief Fail the session directly from the COMMANDED state (reasons like
+  //! RESOURCE_REJECTED are only legal there), releasing everything this command holds.
+  arlcore::umaa::services::CommandStateResult failInCommanded(const std::weak_ptr<CmdSession> session,
+      CommandStatusReasonEnumType reason, const std::string& logMessage);
+
   bool validateWaypoints(
       const std::vector<UMAA::MO::GlobalWaypointControl::GlobalWaypointType>& waypoints) const;
 
@@ -78,8 +85,6 @@ class WaypointControlServiceProvider : public arlcore::umaa::services::CommandPr
   bool acquired_ = false;
   bool planned_ = false;
   int listWaitCycles_ = 0;
-  bool hasFailReason_ = false;
-  CommandStatusReasonEnumType pendingFailReason_ = CommandStatusReasonEnumType::SUCCEEDED;
 };
 
 }  // namespace arlcore::autopilot

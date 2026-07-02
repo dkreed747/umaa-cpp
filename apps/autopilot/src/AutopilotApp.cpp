@@ -18,12 +18,15 @@
 
 #include <chrono>
 #include <memory>
+#include <regex>
+#include <string>
 #include <thread>
 
 #include <UMAA/SA/GlobalPoseStatus/GlobalPoseReportType.hpp>
 #include <UMAA/SA/SpeedStatus/SpeedReportType.hpp>
 #include <UMAA/SA/VelocityStatus/VelocityReportType.hpp>
 
+#include "CycloneQosProviderWrapper.h"
 #include "CycloneReader.h"
 #include "CycloneSender.h"
 #include "CycloneUtilities.h"
@@ -43,23 +46,56 @@ namespace {
 arlcore::NumericGuid parseId(const std::string& uuid) {
   return arlcore::UuidFactory::getInstance().parseGuidFromString(uuid);
 }
+
+//! \brief A source ID must be a well-formed UUID string; anything else would silently
+//! produce a garbage GUID and commands addressed to the configured ID would never match.
+bool validSourceId(const std::string& uuid, const char* name) {
+  static const std::regex kUuidPattern(
+      "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+  if (std::regex_match(uuid, kUuidPattern)) {
+    return true;
+  }
+  UMAA_LOG_ERROR(util::SYSTEM_LOGGER, "identity." << name << " is not a valid UUID: '" << uuid << "'")
+  return false;
+}
 }  // namespace
 
 bool AutopilotApp::initialize(const AutopilotConfig& config) {
   config_ = config;
 
+  if (!validSourceId(config_.identity.vectorSourceId, "vector_source_id") ||
+      !validSourceId(config_.identity.waypointSourceId, "waypoint_source_id") ||
+      !validSourceId(config_.identity.specsSourceId, "specs_source_id") ||
+      !validSourceId(config_.identity.capabilitiesSourceId, "capabilities_source_id") ||
+      !validSourceId(config_.identity.navSourceId, "nav_source_id")) {
+    return false;
+  }
+
   participant_ = arlcore::io::getDomainParticipant(config_.dds.domainId);
   subscriber_ = arlcore::io::createSubscriber(participant_);
   publisher_ = arlcore::io::createPublisher(participant_);
-  const auto rqos = subscriber_.default_datareader_qos();
-  const auto wqos = publisher_.default_datawriter_qos();
+
+  // Honor the configured UMAA QoS profiles (reliable/transient-local); the wrapper falls back
+  // to defaults when the file or profile cannot be resolved.
+  arlcore::io::CycloneQosProviderWrapper qosProvider(config_.dds.qosFile, config_.dds.domainQosProfile);
+  const auto rqos = qosProvider.datareader_qos();
+  const auto wqos = qosProvider.datawriter_qos();
+  const auto largeListRqos = qosProvider.datareader_qos(config_.dds.largeCollectionsQosProfile);
 
   // Vehicle-control strategy (only "sim" is provided here; extend by strategy type).
   if (config_.vehicleControlType != "sim") {
     UMAA_LOG_WARN(util::SYSTEM_LOGGER, "Unknown vehicle_control.type '" << config_.vehicleControlType
       << "', defaulting to sim")
   }
-  vehicle_ = std::make_unique<SimVehicleControl>(config_.platformSpecs, config_.platformCapabilities);
+  vehicle_ = std::make_unique<SimVehicleControl>(
+      config_.platformSpecs, config_.platformCapabilities, config_.simVehicle,
+      parseId(config_.identity.navSourceId),
+      std::make_shared<CycloneSender<UMAA::SA::GlobalPoseStatus::GlobalPoseReportType>>(
+          participant_, UMAA::SA::GlobalPoseStatus::GlobalPoseReportTypeTopic, wqos),
+      std::make_shared<CycloneSender<UMAA::SA::SpeedStatus::SpeedReportType>>(
+          participant_, UMAA::SA::SpeedStatus::SpeedReportTypeTopic, wqos),
+      std::make_shared<CycloneSender<UMAA::SA::VelocityStatus::VelocityReportType>>(
+          participant_, UMAA::SA::VelocityStatus::VelocityReportTypeTopic, wqos));
   if (!vehicle_->initialize()) {
     UMAA_LOG_ERROR(util::SYSTEM_LOGGER, "Vehicle control failed to initialize")
     return false;
@@ -111,7 +147,8 @@ bool AutopilotApp::initialize(const AutopilotConfig& config) {
       std::make_shared<CycloneSender<GlobalWaypointExecutionStatusReportType>>(
           participant_, UMAA::MO::GlobalWaypointControl::GlobalWaypointExecutionStatusReportTypeTopic, wqos),
       std::make_shared<CycloneReader<GlobalWaypointCommandTypeWaypointsListElement>>(
-          participant_, UMAA::MO::GlobalWaypointControl::GlobalWaypointCommandTypeWaypointsListElementTopic, rqos));
+          participant_, UMAA::MO::GlobalWaypointControl::GlobalWaypointCommandTypeWaypointsListElementTopic,
+          largeListRqos));
   waypointProvider_ = std::make_unique<WaypointControlServiceProvider>(
       parseId(config_.identity.waypointSourceId), waypointIo, brain_.get(), maxForwardSpeed,
       config_.planner.maxListWaitCycles);
@@ -142,6 +179,7 @@ void AutopilotApp::step() {
   poseConsumer_->cycle();
   speedConsumer_->cycle();
   velocityConsumer_->cycle();
+  brain_->enforceNavStaleness();
   vectorProvider_->cycle();
   waypointProvider_->cycle();
 }
@@ -159,6 +197,9 @@ void AutopilotApp::run() {
 
 void AutopilotApp::stop() {
   running_ = false;
+  if (vehicle_) {
+    vehicle_->shutdown();
+  }
 }
 
 }  // namespace arlcore::autopilot

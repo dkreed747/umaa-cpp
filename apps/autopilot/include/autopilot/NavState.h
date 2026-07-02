@@ -17,6 +17,7 @@
 #ifndef APPS_AUTOPILOT_INCLUDE_AUTOPILOT_NAVSTATE_H_
 #define APPS_AUTOPILOT_INCLUDE_AUTOPILOT_NAVSTATE_H_
 
+#include <chrono>
 #include <mutex>
 #include <optional>
 
@@ -34,6 +35,7 @@ class NavState {
   void setPose(const UMAA::SA::GlobalPoseStatus::GlobalPoseReportType& pose) {
     std::lock_guard<std::mutex> lock(mtx_);
     pose_ = pose;
+    poseReceivedAt_ = std::chrono::steady_clock::now();
   }
   void setSpeed(const UMAA::SA::SpeedStatus::SpeedReportType& speed) {
     std::lock_guard<std::mutex> lock(mtx_);
@@ -62,6 +64,16 @@ class NavState {
     return pose_.has_value();
   }
 
+  //! \brief Milliseconds since the newest pose was received (nullopt before the first fix).
+  std::optional<int64_t> poseAgeMs() const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (!pose_.has_value()) {
+      return std::nullopt;
+    }
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - poseReceivedAt_).count();
+  }
+
   //! \brief Current ground speed if reported, else 0.
   double groundSpeedMps() const {
     std::lock_guard<std::mutex> lock(mtx_);
@@ -74,6 +86,7 @@ class NavState {
  private:
   mutable std::mutex mtx_;
   std::optional<UMAA::SA::GlobalPoseStatus::GlobalPoseReportType> pose_;
+  std::chrono::steady_clock::time_point poseReceivedAt_{};
   std::optional<UMAA::SA::SpeedStatus::SpeedReportType> speed_;
   std::optional<UMAA::SA::VelocityStatus::VelocityReportType> velocity_;
 };

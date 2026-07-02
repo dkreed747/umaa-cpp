@@ -37,6 +37,7 @@ struct IdentityConfig {
   std::string waypointSourceId;
   std::string specsSourceId;
   std::string capabilitiesSourceId;
+  std::string navSourceId;  // source for the sim vehicle's SA navigation reports
 };
 
 //! \brief Driving-resource arbitration priorities. Higher wins.
@@ -55,7 +56,8 @@ struct VectorToleranceConfig {
   double directionRad = 0.0873;
   double speedMps = 0.25;
   double elevationM = 1.0;
-  bool hard = false;
+  bool hard = false;           // if true, persistent violation fails the command
+  double failureDelayS = 5.0;  // how long a violation must persist before failing (hard only)
 };
 
 //! \brief Default capture tolerances applied to a waypoint when it omits them.
@@ -109,6 +111,17 @@ struct PlatformCapabilitiesConfig {
   CapabilityLimits underwater;
 };
 
+//! \brief Simulated-vehicle strategy configuration (vehicle_control.sim in the YAML). The sim
+//! integrates the platform kinematics from the capability limits at cycle_rate_hz and
+//! publishes the three SA navigation reports.
+struct SimVehicleConfig {
+  double cycleRateHz = 20.0;
+  double initialLatitudeDeg = 39.0;
+  double initialLongitudeDeg = -76.5;
+  double initialHeadingRad = 0.0;
+  double accelMps2 = 1.0;  // surge acceleration/deceleration limit
+};
+
 //! \brief Top-level configuration produced by YamlConfigLoader and consumed by
 //! AutopilotApp::initialize().
 struct AutopilotConfig {
@@ -120,6 +133,7 @@ struct AutopilotConfig {
   WaypointToleranceConfig waypointTolerances;
   PlannerConfig planner;
   std::string vehicleControlType = "sim";
+  SimVehicleConfig simVehicle;
   PlatformSpecsConfig platformSpecs;
   PlatformCapabilitiesConfig platformCapabilities;
 };

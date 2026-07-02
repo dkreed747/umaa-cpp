@@ -53,6 +53,11 @@ target_link_libraries(autopilot PRIVATE autopilot-lib)
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/config/autopilot.yaml
   ${CMAKE_BINARY_DIR}/autopilot.yaml COPYONLY)
 
+# Mission runner: end-to-end waypoint mission driver (UMAA consumer side).
+add_executable(mission_runner ${CMAKE_CURRENT_SOURCE_DIR}/tools/mission_runner.cpp)
+target_compile_options(mission_runner PRIVATE -fPIC -fpermissive)
+target_link_libraries(mission_runner PRIVATE autopilot-lib)
+
 # Unit/integration tests reuse the SDK's GoogleTest + LocalReaderSender loopback IO,
 # which are only available when the SDK test tree is enabled.
 if(TEST_COMMON OR TEST_CYCLONE)

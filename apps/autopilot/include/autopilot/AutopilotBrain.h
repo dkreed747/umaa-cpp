@@ -17,7 +17,9 @@
 #ifndef APPS_AUTOPILOT_INCLUDE_AUTOPILOT_AUTOPILOTBRAIN_H_
 #define APPS_AUTOPILOT_INCLUDE_AUTOPILOT_AUTOPILOTBRAIN_H_
 
+#include <chrono>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 #include "AutopilotConfig.h"
@@ -40,6 +42,11 @@ class AutopilotBrain : public IAutopilot {
       const std::vector<UMAA::MO::GlobalWaypointControl::GlobalWaypointType>& waypoints) override;
   void clearSetpoint(DriveSource src) override;
   void onNavUpdate() override;
+
+  //! \brief Called every control-loop tick: if a drive mode is active but the newest pose is
+  //! older than the configured staleness timeout, command a zero-speed hold so the vehicle
+  //! does not keep driving blind on stale navigation.
+  void enforceNavStaleness();
   VectorProgress vectorProgress() const override;
   WaypointProgress waypointProgress() const override;
   DrivingResourceArbiter& arbiter() override { return arbiter_; }
@@ -63,6 +70,11 @@ class AutopilotBrain : public IAutopilot {
   UMAA::MO::GlobalVectorControl::GlobalVectorCommandType activeVector_;
   VectorProgress vectorProgress_;
   WaypointProgress waypointProgress_;
+
+  // Hard-tolerance tracking for the active vector command: once all criteria have been
+  // achieved, a persistent violation (longer than failureDelayS) fails the command.
+  bool vectorEverAchieved_ = false;
+  std::optional<std::chrono::steady_clock::time_point> vectorViolationSince_;
 };
 
 }  // namespace arlcore::autopilot

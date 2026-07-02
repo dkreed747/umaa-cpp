@@ -30,37 +30,51 @@
 
 namespace arlcore::autopilot {
 
-//! \brief A heading requirement: a value (radians, true north) with an optional tolerance
-//! half-width (radians).
+//! \brief An absolute allowable range [lower, upper] for a scalar quantity (UMAA speed,
+//! depth, and altitude tolerances specify "limits of allowable values", not offsets).
+struct ValueRange {
+  double lower = 0.0;
+  double upper = 0.0;
+};
+
+//! \brief An absolute allowable angular interval, clockwise from lower to upper (UMAA yaw
+//! tolerances specify absolute bounds).
+struct AngleRange {
+  double lowerRad = 0.0;
+  double upperRad = 0.0;
+};
+
+//! \brief A heading requirement (radians, true north). Per the UMAA DirectionToleranceType
+//! IDL, the tolerance limits are deviations from the setpoint: lowerlimit counterclockwise
+//! and upperlimit clockwise (magnitudes).
 struct DirectionValue {
   double headingRad = 0.0;
-  std::optional<double> toleranceRad;
+  std::optional<double> ccwToleranceRad;
+  std::optional<double> cwToleranceRad;
 };
 
-//! \brief A speed requirement: a value (m/s) with an optional tolerance (m/s).
+//! \brief A speed requirement: setpoint (m/s) with an optional absolute allowable range.
 struct SpeedValue {
   double speedMps = 0.0;
-  std::optional<double> toleranceMps;
+  std::optional<ValueRange> allowable;
 };
 
-//! \brief An elevation/depth requirement: value, frame, and optional tolerance.
+//! \brief An elevation/depth requirement: setpoint, frame, and optional allowable range.
 struct ElevationValue {
   double valueM = 0.0;
   ElevationFrame frame = ElevationFrame::DEPTH;
-  std::optional<double> toleranceM;
+  std::optional<ValueRange> allowable;
 };
 
-//! \brief A yaw requirement: value (radians, NED) and optional tolerance half-width (radians).
+//! \brief An arrival-yaw requirement: setpoint (radians, NED) and optional absolute bounds.
 struct AttitudeValue {
   double yawRad = 0.0;
-  std::optional<double> yawToleranceRad;
+  std::optional<AngleRange> allowable;
 };
 
 //! \brief Helpers to pull plain scalar values + tolerances out of UMAA requirement-variant
-//! unions. Centralizing this keeps the union-discriminator handling in one place.
-//!
-//! NOTE: these traverse generated CycloneDDS-CXX union accessors; the exact accessor chains
-//! are the highest-risk area to confirm at first compile in the SDK build container.
+//! unions, and to evaluate achievement against them. Centralizing this keeps the
+//! union-discriminator handling and the per-type tolerance semantics in one place.
 namespace tolerance {
 
 //! \brief Extract the commanded heading + tolerance from a direction requirement. Supports
@@ -86,6 +100,19 @@ AttitudeValue extractYaw(const UMAA::Common::Orientation::Orientation3DNEDRequir
 //! \brief Extract the cross-track distance tolerance (meters) from a track tolerance, if set.
 std::optional<double> extractTrackToleranceM(
     const UMAA::Common::Distance::DistanceRequirementType& trackTolerance);
+
+//! \brief Whether an actual heading satisfies the direction requirement (falls back to a
+//! symmetric half-width of defaultTolRad when the command carries no tolerance).
+bool directionAchieved(const DirectionValue& dir, double actualRad, double defaultTolRad);
+
+//! \brief Whether an actual speed satisfies the speed requirement.
+bool speedAchieved(const SpeedValue& speed, double actualMps, double defaultTolMps);
+
+//! \brief Whether an actual elevation satisfies the elevation requirement.
+bool elevationAchieved(const ElevationValue& elevation, double actualM, double defaultTolM);
+
+//! \brief Whether an actual yaw satisfies the arrival-attitude requirement.
+bool attitudeAchieved(const AttitudeValue& attitude, double actualYawRad, double defaultTolRad);
 
 }  // namespace tolerance
 }  // namespace arlcore::autopilot

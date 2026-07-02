@@ -18,6 +18,7 @@
 
 #include <cmath>
 
+#include "GeographicUtils.h"
 #include "Logger.h"
 
 namespace arlcore::autopilot::tolerance {
@@ -26,13 +27,6 @@ using UMAA::Common::Orientation::DirectionRequirementVariantTypeEnum;
 using UMAA::Common::Speed::SpeedRequirementVariantTypeEnum;
 using UMAA::Common::Speed::VariableSpeedVariantTypeEnum;
 using UMAA::Common::Measurement::ElevationRequirementVariantTypeEnum;
-
-namespace {
-//! \brief Half-width of a [lower, upper] tolerance band.
-double bandHalfWidth(double lower, double upper) {
-  return std::abs(upper - lower) / 2.0;
-}
-}  // namespace
 
 std::optional<DirectionValue> extractDirection(
     const UMAA::Common::Orientation::DirectionRequirementVariantType& dir) {
@@ -43,8 +37,10 @@ std::optional<DirectionValue> extractDirection(
       const auto& req = sub.DirectionTrueNorthRequirementVariantVariant().direction();
       out.headingRad = req.direction();
       if (req.directionTolerance().has_value()) {
-        out.toleranceRad = bandHalfWidth(req.directionTolerance().value().lowerlimit(),
-                                         req.directionTolerance().value().upperlimit());
+        // Per the IDL: lowerlimit is the allowed deviation counterclockwise of the setpoint,
+        // upperlimit clockwise (magnitudes).
+        out.ccwToleranceRad = std::fabs(req.directionTolerance().value().lowerlimit());
+        out.cwToleranceRad = std::fabs(req.directionTolerance().value().upperlimit());
       }
       return out;
     }
@@ -53,8 +49,8 @@ std::optional<DirectionValue> extractDirection(
       const auto& req = sub.DirectionMagneticNorthRequirementVariantVariant().direction();
       out.headingRad = req.direction();
       if (req.directionTolerance().has_value()) {
-        out.toleranceRad = bandHalfWidth(req.directionTolerance().value().lowerlimit(),
-                                         req.directionTolerance().value().upperlimit());
+        out.ccwToleranceRad = std::fabs(req.directionTolerance().value().lowerlimit());
+        out.cwToleranceRad = std::fabs(req.directionTolerance().value().upperlimit());
       }
       return out;
     }
@@ -73,8 +69,9 @@ std::optional<SpeedValue> extractSpeed(
       const auto& req = sub.GroundSpeedRequirementVariantVariant().speed();
       out.speedMps = req.speed();
       if (req.speedTolerance().has_value()) {
-        out.toleranceMps = bandHalfWidth(req.speedTolerance().value().lowerlimit(),
-                                         req.speedTolerance().value().upperlimit());
+        // Absolute limits of allowable values per the IDL.
+        out.allowable = ValueRange{req.speedTolerance().value().lowerlimit(),
+                                   req.speedTolerance().value().upperlimit()};
       }
       return out;
     }
@@ -82,8 +79,8 @@ std::optional<SpeedValue> extractSpeed(
       const auto& req = sub.WaterSpeedRequirementVariantVariant().speed();
       out.speedMps = req.speed();
       if (req.speedTolerance().has_value()) {
-        out.toleranceMps = bandHalfWidth(req.speedTolerance().value().lowerlimit(),
-                                         req.speedTolerance().value().upperlimit());
+        out.allowable = ValueRange{req.speedTolerance().value().lowerlimit(),
+                                   req.speedTolerance().value().upperlimit()};
       }
       return out;
     }
@@ -118,23 +115,41 @@ std::optional<ElevationValue> extractElevation(
       out.valueM = req.depth();
       out.frame = ElevationFrame::DEPTH;
       if (req.depthTolerance().has_value()) {
-        out.toleranceM = bandHalfWidth(req.depthTolerance().value().lowerLimit(),
-                                       req.depthTolerance().value().upperlimit());
+        out.allowable = ValueRange{req.depthTolerance().value().lowerLimit(),
+                                   req.depthTolerance().value().upperlimit()};
       }
       return out;
     }
-    case ElevationRequirementVariantTypeEnum::ALTITUDEMSLREQUIREMENTVARIANT_D:
-      out.valueM = sub.AltitudeMSLRequirementVariantVariant().altitude().altitude();
+    case ElevationRequirementVariantTypeEnum::ALTITUDEMSLREQUIREMENTVARIANT_D: {
+      const auto& req = sub.AltitudeMSLRequirementVariantVariant().altitude();
+      out.valueM = req.altitude();
       out.frame = ElevationFrame::ALTITUDE_MSL;
+      if (req.altitudeTolerance().has_value()) {
+        out.allowable = ValueRange{req.altitudeTolerance().value().lowerLimit(),
+                                   req.altitudeTolerance().value().upperlimit()};
+      }
       return out;
-    case ElevationRequirementVariantTypeEnum::ALTITUDEAGLREQUIREMENTVARIANT_D:
-      out.valueM = sub.AltitudeAGLRequirementVariantVariant().altitude().altitude();
+    }
+    case ElevationRequirementVariantTypeEnum::ALTITUDEAGLREQUIREMENTVARIANT_D: {
+      const auto& req = sub.AltitudeAGLRequirementVariantVariant().altitude();
+      out.valueM = req.altitude();
       out.frame = ElevationFrame::ALTITUDE_AGL;
+      if (req.altitudeTolerance().has_value()) {
+        out.allowable = ValueRange{req.altitudeTolerance().value().lowerLimit(),
+                                   req.altitudeTolerance().value().upperlimit()};
+      }
       return out;
-    case ElevationRequirementVariantTypeEnum::ALTITUDEGEODETICREQUIREMENTVARIANT_D:
-      out.valueM = sub.AltitudeGeodeticRequirementVariantVariant().altitude().altitude();
+    }
+    case ElevationRequirementVariantTypeEnum::ALTITUDEGEODETICREQUIREMENTVARIANT_D: {
+      const auto& req = sub.AltitudeGeodeticRequirementVariantVariant().altitude();
+      out.valueM = req.altitude();
       out.frame = ElevationFrame::ALTITUDE_GEODETIC;
+      if (req.altitudeTolerance().has_value()) {
+        out.allowable = ValueRange{req.altitudeTolerance().value().lowerLimit(),
+                                   req.altitudeTolerance().value().upperlimit()};
+      }
       return out;
+    }
     default:
       UMAA_LOG_WARN(util::SYSTEM_LOGGER, "Unsupported elevation variant for autopilot elevation control")
       return std::nullopt;
@@ -145,8 +160,9 @@ AttitudeValue extractYaw(const UMAA::Common::Orientation::Orientation3DNEDRequir
   AttitudeValue out;
   out.yawRad = attitude.yawZ().yaw().yaw();
   if (attitude.yawZ().yawTolerance().has_value()) {
-    out.yawToleranceRad = bandHalfWidth(attitude.yawZ().yawTolerance().value().lowerlimit().yaw(),
-                                        attitude.yawZ().yawTolerance().value().upperlimit().yaw());
+    // Absolute yaw bounds per the IDL ("defines the lower/upper bound").
+    out.allowable = AngleRange{attitude.yawZ().yawTolerance().value().lowerlimit().yaw(),
+                               attitude.yawZ().yawTolerance().value().upperlimit().yaw()};
   }
   return out;
 }
@@ -155,6 +171,45 @@ std::optional<double> extractTrackToleranceM(
     const UMAA::Common::Distance::DistanceRequirementType& trackTolerance) {
   // The track tolerance's distance field is the allowed cross-track distance from the line.
   return trackTolerance.distance();
+}
+
+bool directionAchieved(const DirectionValue& dir, double actualRad, double defaultTolRad) {
+  const double err = arlcore::Unwind(actualRad - dir.headingRad);
+  if (dir.ccwToleranceRad.has_value() || dir.cwToleranceRad.has_value()) {
+    // err < 0 is counterclockwise of the setpoint, err > 0 clockwise.
+    const double ccw = dir.ccwToleranceRad.value_or(0.0);
+    const double cw = dir.cwToleranceRad.value_or(0.0);
+    return err >= -ccw && err <= cw;
+  }
+  return std::fabs(err) <= defaultTolRad;
+}
+
+bool speedAchieved(const SpeedValue& speed, double actualMps, double defaultTolMps) {
+  if (speed.allowable.has_value()) {
+    return actualMps >= speed.allowable->lower && actualMps <= speed.allowable->upper;
+  }
+  return std::fabs(actualMps - speed.speedMps) <= defaultTolMps;
+}
+
+bool elevationAchieved(const ElevationValue& elevation, double actualM, double defaultTolM) {
+  if (elevation.allowable.has_value()) {
+    return actualM >= elevation.allowable->lower && actualM <= elevation.allowable->upper;
+  }
+  return std::fabs(actualM - elevation.valueM) <= defaultTolM;
+}
+
+bool attitudeAchieved(const AttitudeValue& attitude, double actualYawRad, double defaultTolRad) {
+  if (attitude.allowable.has_value()) {
+    // Angular interval [lower, upper] traversed clockwise; membership via offsets from lower.
+    const double span = attitude.allowable->upperRad - attitude.allowable->lowerRad;
+    const double spanNorm = (span >= 0.0) ? span : span + 2.0 * M_PI;
+    double rel = std::fmod(actualYawRad - attitude.allowable->lowerRad, 2.0 * M_PI);
+    if (rel < 0.0) {
+      rel += 2.0 * M_PI;
+    }
+    return rel <= spanNorm;
+  }
+  return std::fabs(arlcore::Unwind(actualYawRad - attitude.yawRad)) <= defaultTolRad;
 }
 
 }  // namespace arlcore::autopilot::tolerance

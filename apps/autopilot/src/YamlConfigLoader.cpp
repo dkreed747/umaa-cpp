@@ -75,6 +75,9 @@ bool YamlConfigLoader::load(const std::string& path, AutopilotConfig* out) {
     return false;
   }
 
+  // Field parsing throws YAML::TypedBadConversion on type-mismatched values; contain it so a
+  // bad config reports an error instead of aborting the process.
+  try {
   const YAML::Node dds = root["dds"];
   readScalar(dds, "domain_id", &out->dds.domainId);
   readScalar(dds, "qos_file", &out->dds.qosFile);
@@ -86,6 +89,7 @@ bool YamlConfigLoader::load(const std::string& path, AutopilotConfig* out) {
   readScalar(identity, "waypoint_source_id", &out->identity.waypointSourceId);
   readScalar(identity, "specs_source_id", &out->identity.specsSourceId);
   readScalar(identity, "capabilities_source_id", &out->identity.capabilitiesSourceId);
+  readScalar(identity, "nav_source_id", &out->identity.navSourceId);
 
   const YAML::Node arb = root["arbitration"];
   readScalar(arb, "vector_priority", &out->arbitration.vectorPriority);
@@ -102,6 +106,7 @@ bool YamlConfigLoader::load(const std::string& path, AutopilotConfig* out) {
     readScalar(vec, "speed_mps", &out->vectorTolerances.speedMps);
     readScalar(vec, "elevation_m", &out->vectorTolerances.elevationM);
     readScalar(vec, "hard", &out->vectorTolerances.hard);
+    readScalar(vec, "failure_delay_s", &out->vectorTolerances.failureDelayS);
 
     const YAML::Node wp = tol["waypoint_defaults"];
     readScalar(wp, "position_m", &out->waypointTolerances.positionM);
@@ -119,6 +124,14 @@ bool YamlConfigLoader::load(const std::string& path, AutopilotConfig* out) {
 
   const YAML::Node vc = root["vehicle_control"];
   readScalar(vc, "type", &out->vehicleControlType);
+  if (vc) {
+    const YAML::Node sim = vc["sim"];
+    readScalar(sim, "cycle_rate_hz", &out->simVehicle.cycleRateHz);
+    readScalar(sim, "initial_latitude_deg", &out->simVehicle.initialLatitudeDeg);
+    readScalar(sim, "initial_longitude_deg", &out->simVehicle.initialLongitudeDeg);
+    readScalar(sim, "initial_heading_rad", &out->simVehicle.initialHeadingRad);
+    readScalar(sim, "accel_mps2", &out->simVehicle.accelMps2);
+  }
 
   const YAML::Node specs = root["platform_specs"];
   readScalar(specs, "name", &out->platformSpecs.name);
@@ -144,6 +157,10 @@ bool YamlConfigLoader::load(const std::string& path, AutopilotConfig* out) {
       readScalar(uw, "enabled", &out->platformCapabilities.underwaterEnabled);
       readCapabilityLimits(uw, &out->platformCapabilities.underwater);
     }
+  }
+  } catch (const YAML::Exception& ex) {
+    UMAA_LOG_ERROR(util::SYSTEM_LOGGER, "Invalid value in autopilot config '" << path << "': " << ex.what())
+    return false;
   }
 
   return true;

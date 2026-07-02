@@ -36,6 +36,10 @@ class IVehicleControl {
   //! \return true on success
   virtual bool initialize() = 0;
 
+  //! \brief Stop the underlying hardware/sim link (joins any internal threads). Safe to call
+  //! multiple times; strategies also call it from their destructors.
+  virtual void shutdown() {}
+
   //! \brief Send a vector-like control setpoint (heading, speed, elevation/depth) to the platform.
   //! \param cv The control vector to actuate
   //! \return true if the setpoint was accepted by the platform link
