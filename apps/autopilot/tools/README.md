@@ -19,15 +19,19 @@ vehicle's configured start position.
 ./apps/autopilot/mission_runner autopilot.yaml mission-out
 
 # ... or fly a custom route (local tangent-plane CSV, one waypoint per line:
-# east_m,north_m,speed_mps,capture_radius_m[,arrival_yaw_rad])
+# east_m,north_m,speed_mps,capture_radius_m[,arrival_yaw_rad][,elev_value_m,elev_frame]
+# where elev_frame is `depth` or `asf`)
 ./apps/autopilot/mission_runner autopilot.yaml mission-out my-mission.csv
 ```
 
 Outputs in the chosen directory:
 
-- `track.csv` — `elapsed_s, lat_deg, lon_deg, yaw_rad, speed_mps` sampled from the SA
-  Global Pose / Speed reports.
-- `waypoints.csv` — the planned route: `index, lat_deg, lon_deg, capture_radius_m, arrival_yaw_rad`.
+- `track.csv` — `elapsed_s, lat_deg, lon_deg, yaw_rad, speed_mps, depth_m, alt_asf_m`
+  sampled from the SA Global Pose / Speed reports.
+- `waypoints.csv` — the commanded route: `index, lat_deg, lon_deg, capture_radius_m,
+  arrival_yaw_rad, elev_value_m, elev_frame`.
+- `planned_path.csv` — the ideal planned Dubins route (`lat_deg, lon_deg` samples), for
+  comparing the executed track against the plan.
 - `status.log` — command status transitions and the final state.
 
 Exit code 0 iff the command COMPLETED.

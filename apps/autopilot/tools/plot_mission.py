@@ -17,11 +17,13 @@
 
 Usage: plot_mission.py <mission-out-dir> [output.png]
 
-Reads track.csv (elapsed_s, lat_deg, lon_deg, yaw_rad, speed_mps) and waypoints.csv
-(index, lat_deg, lon_deg, capture_radius_m) as written by mission_runner, and renders:
-  - the ground track with the planned waypoints and their capture radii,
+Reads track.csv, waypoints.csv, and planned_path.csv as written by mission_runner and
+renders:
+  - the ground track overlaid on the ideal planned Dubins route, with the waypoints, their
+    capture gates, and required arrival attitudes,
   - north/east position components over time,
-  - speed over ground over time.
+  - speed over ground over time,
+  - depth / altitude-above-sea-floor over time (when the platform reports them).
 """
 import csv
 import math
@@ -44,6 +46,8 @@ def main():
 
     track = read_csv(out_dir / "track.csv")
     waypoints = read_csv(out_dir / "waypoints.csv")
+    planned_file = out_dir / "planned_path.csv"
+    planned = read_csv(planned_file) if planned_file.exists() else []
     if not track:
         sys.exit("track.csv is empty")
 
@@ -59,6 +63,10 @@ def main():
     t = [float(r["elapsed_s"]) for r in track]
     east, north = zip(*[to_local(float(r["lat_deg"]), float(r["lon_deg"])) for r in track])
     speed = [float(r["speed_mps"]) for r in track]
+    depth = [float(r["depth_m"]) if r.get("depth_m") not in (None, "") else None for r in track]
+    alt_asf = [float(r["alt_asf_m"]) if r.get("alt_asf_m") not in (None, "") else None
+               for r in track]
+    has_depth = any(d is not None for d in depth)
     wp_e, wp_n, wp_r, wp_yaw = [], [], [], []
     for r in waypoints:
         e, n = to_local(float(r["lat_deg"]), float(r["lon_deg"]))
@@ -69,7 +77,8 @@ def main():
         wp_yaw.append(float(yaw) if yaw not in (None, "") else None)
 
     fig = plt.figure(figsize=(14, 9), constrained_layout=True)
-    grid = fig.add_gridspec(2, 2, width_ratios=[1.4, 1.0])
+    rows = 3 if has_depth else 2
+    grid = fig.add_gridspec(rows, 2, width_ratios=[1.4, 1.0])
     fig.suptitle("Autopilot waypoint mission — simulated vehicle", fontsize=14)
 
     # Ground track vs planned waypoints.
@@ -79,8 +88,13 @@ def main():
             linestyle="none", label="start", zorder=5)
     ax.plot(east[-1], north[-1], marker="s", color="#ff725c", markersize=8,
             linestyle="none", label="end", zorder=5)
-    ax.plot(wp_e, wp_n, linestyle="--", color="#9c6b4e", linewidth=1.0, alpha=0.7,
-            label="planned route (waypoint order)", zorder=2)
+    if planned:
+        pe, pn = zip(*[to_local(float(r["lat_deg"]), float(r["lon_deg"])) for r in planned])
+        ax.plot(pe, pn, linestyle="--", color="#9c6b4e", linewidth=1.2, alpha=0.9,
+                label="planned Dubins route", zorder=2)
+    else:
+        ax.plot(wp_e, wp_n, linestyle="--", color="#9c6b4e", linewidth=1.0, alpha=0.7,
+                label="planned route (waypoint order)", zorder=2)
     span = max(max(wp_n) - min(wp_n), max(wp_e) - min(wp_e), 1.0)
     arrow_len = 0.06 * span
     has_attitude = False
@@ -123,6 +137,23 @@ def main():
     ax.set_ylabel("speed over ground (m/s)")
     ax.set_title("Speed over time")
     ax.grid(True, alpha=0.3)
+
+    # Depth / altitude above sea floor over time.
+    if has_depth:
+        ax = fig.add_subplot(grid[2, 1])
+        td = [ti for ti, d in zip(t, depth) if d is not None]
+        ax.plot(td, [d for d in depth if d is not None], color="#4269d0", linewidth=1.4,
+                label="depth (m)")
+        if any(a is not None for a in alt_asf):
+            ta = [ti for ti, a in zip(t, alt_asf) if a is not None]
+            ax.plot(ta, [a for a in alt_asf if a is not None], color="#a3770a",
+                    linewidth=1.4, label="altitude above sea floor (m)")
+        ax.invert_yaxis()  # depth grows downward
+        ax.set_xlabel("elapsed time (s)")
+        ax.set_ylabel("meters (depth axis down)")
+        ax.set_title("Depth / height above floor over time")
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="best", fontsize=9)
 
     fig.savefig(out_png, dpi=150)
     print(f"wrote {out_png}")

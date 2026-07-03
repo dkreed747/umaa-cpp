@@ -18,15 +18,18 @@
 //! side: publishes a GlobalWaypointCommandType (destination = the autopilot's waypoint
 //! provider) plus its large-list route, then records the vehicle's Global Pose track and the
 //! command status until the mission completes. Outputs:
-//!   <out>/track.csv      elapsed_s, lat_deg, lon_deg, yaw_rad, speed_mps
-//!   <out>/waypoints.csv  index, lat_deg, lon_deg, capture_radius_m, arrival_yaw_rad
-//!   <out>/status.log     command status transitions
+//!   <out>/track.csv        elapsed_s, lat_deg, lon_deg, yaw_rad, speed_mps, depth_m, alt_asf_m
+//!   <out>/waypoints.csv    index, lat_deg, lon_deg, capture_radius_m, arrival_yaw_rad,
+//!                          elev_value_m, elev_frame
+//!   <out>/planned_path.csv the ideal planned Dubins route (lat_deg, lon_deg samples)
+//!   <out>/status.log       command status transitions
 //! Usage: mission_runner [autopilot.yaml] [output-dir] [mission.csv]
 //!
 //! The optional mission CSV defines the route in the local tangent plane at the sim start,
-//! one waypoint per line: east_m,north_m,speed_mps,capture_radius_m[,arrival_yaw_rad]
-//! (header line ignored; leave arrival_yaw_rad empty for no attitude requirement). Without a
-//! mission file a built-in closed loop with turns in both directions is flown.
+//! one waypoint per line:
+//!   east_m,north_m,speed_mps,capture_radius_m[,arrival_yaw_rad][,elev_value_m,elev_frame]
+//! (header line ignored; leave arrival_yaw_rad empty for no attitude requirement; elev_frame
+//! is `depth` or `asf`). Without a mission file a built-in closed loop is flown.
 
 #include <cctype>
 #include <chrono>
@@ -51,6 +54,8 @@
 
 #include "AutopilotConfig.h"
 #include "CycloneQosProviderWrapper.h"
+#include "DubinsPathPlanner.h"
+#include "PlannerParamsFactory.h"
 #include "CycloneReader.h"
 #include "CycloneSender.h"
 #include "CycloneUtilities.h"
@@ -80,8 +85,10 @@ struct LocalWaypoint {
   double eastM = 0.0;
   double northM = 0.0;
   double speedMps = 3.0;
-  double captureRadiusM = 10.0;
+  double captureRadiusM = 2.5;
   std::optional<double> arrivalYawRad;
+  std::optional<double> elevValueM;
+  std::string elevFrame;  // "depth" or "asf"
 };
 
 //! \brief Parse a mission CSV (east_m,north_m,speed_mps,capture_radius_m[,arrival_yaw_rad]).
@@ -113,6 +120,10 @@ std::vector<LocalWaypoint> loadMissionCsv(const std::string& path) {
     if (fields.size() >= 5 && !fields[4].empty()) {
       lw.arrivalYawRad = std::stod(fields[4]);
     }
+    if (fields.size() >= 7 && !fields[5].empty() && !fields[6].empty()) {
+      lw.elevValueM = std::stod(fields[5]);
+      lw.elevFrame = fields[6];
+    }
     route.push_back(lw);
   }
   return route;
@@ -142,6 +153,21 @@ GlobalWaypointType makeWaypoint(const GeographicLib::LocalCartesian& frame, cons
     UMAA::Common::Orientation::Orientation3DNEDRequirement att;
     att.yawZ().yaw().yaw(lw.arrivalYawRad.value());
     wp.attitude() = att;
+  }
+  if (lw.elevValueM.has_value()) {
+    UMAA::Common::Measurement::ElevationRequirementVariantType elev;
+    if (lw.elevFrame == "asf") {
+      elev.ElevationRequirementVariantTypeSubtypes().AltitudeASFRequirementVariantVariant(
+          UMAA::Common::Measurement::AltitudeASFRequirementVariantType());
+      elev.ElevationRequirementVariantTypeSubtypes().AltitudeASFRequirementVariantVariant()
+          .altitude().altitude(lw.elevValueM.value());
+    } else {
+      elev.ElevationRequirementVariantTypeSubtypes().DepthRequirementVariantVariant(
+          UMAA::Common::Measurement::DepthRequirementVariantType());
+      elev.ElevationRequirementVariantTypeSubtypes().DepthRequirementVariantVariant().depth()
+          .depth(lw.elevValueM.value());
+    }
+    wp.elevation() = elev;
   }
   wp.waypointID() = arlcore::UuidFactory::getInstance().generateGuid().getGuid();
   return wp;
@@ -209,7 +235,7 @@ int main(int argc, char** argv) {
   {
     std::ofstream wpCsv(outDir + "/waypoints.csv");
     wpCsv.precision(10);
-    wpCsv << "index,lat_deg,lon_deg,capture_radius_m,arrival_yaw_rad\n";
+    wpCsv << "index,lat_deg,lon_deg,capture_radius_m,arrival_yaw_rad,elev_value_m,elev_frame\n";
     for (std::size_t i = 0; i < waypoints.size(); i++) {
       wpCsv << i << "," << waypoints[i].position().value().geodeticLatitude() << ","
             << waypoints[i].position().value().geodeticLongitude() << ","
@@ -217,7 +243,30 @@ int main(int argc, char** argv) {
       if (localRoute[i].arrivalYawRad.has_value()) {
         wpCsv << localRoute[i].arrivalYawRad.value();
       }
+      wpCsv << ",";
+      if (localRoute[i].elevValueM.has_value()) {
+        wpCsv << localRoute[i].elevValueM.value() << "," << localRoute[i].elevFrame;
+      } else {
+        wpCsv << ",";
+      }
       wpCsv << "\n";
+    }
+  }
+
+  // Export the ideal planned Dubins route for plotting: plan the same route with the same
+  // platform-derived parameters from the sim start pose and sample it.
+  {
+    GlobalPoseReportType startPose;
+    startPose.position().geodeticLatitude(config.simVehicle.initialLatitudeDeg);
+    startPose.position().geodeticLongitude(config.simVehicle.initialLongitudeDeg);
+    startPose.attitude().yaw().yaw(config.simVehicle.initialHeadingRad);
+    arlcore::autopilot::DubinsPathPlanner previewPlanner;
+    previewPlanner.plan(waypoints, startPose, arlcore::autopilot::derivePlannerParams(config));
+    std::ofstream plannedCsv(outDir + "/planned_path.csv");
+    plannedCsv.precision(10);
+    plannedCsv << "lat_deg,lon_deg\n";
+    for (const auto& [lat, lon] : previewPlanner.previewRoute(2.0)) {
+      plannedCsv << lat << "," << lon << "\n";
     }
   }
 
@@ -258,7 +307,7 @@ int main(int argc, char** argv) {
 
   std::ofstream track(outDir + "/track.csv");
   track.precision(10);
-  track << "elapsed_s,lat_deg,lon_deg,yaw_rad,speed_mps\n";
+  track << "elapsed_s,lat_deg,lon_deg,yaw_rad,speed_mps,depth_m,alt_asf_m\n";
   std::ofstream statusLog(outDir + "/status.log");
 
   const auto start = std::chrono::steady_clock::now();
@@ -279,7 +328,15 @@ int main(int argc, char** argv) {
     if (poseReader->readLatest(&pose) == ReadStatus::SUCCESS) {
       track << elapsed << "," << pose.position().geodeticLatitude() << ","
             << pose.position().geodeticLongitude() << "," << pose.attitude().yaw().yaw() << ","
-            << lastSpeed << "\n";
+            << lastSpeed << ",";
+      if (pose.depth().has_value()) {
+        track << pose.depth().value();
+      }
+      track << ",";
+      if (pose.altitudeASF().has_value()) {
+        track << pose.altitudeASF().value();
+      }
+      track << "\n";
     }
 
     GlobalWaypointCommandStatusType status;

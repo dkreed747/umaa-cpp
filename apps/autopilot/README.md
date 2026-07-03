@@ -20,7 +20,10 @@ Three layers (namespace `arlcore::autopilot`):
    internal kinematic vehicle (limits from the platform capabilities), integrates it on its
    own thread at `vehicle_control.sim.cycle_rate_hz` acting on the latest setpoint, and
    publishes the three SA navigation reports (Global Pose / Speed / Velocity) — closing the
-   control loop exactly as a real vehicle's navigation suite would.
+   control loop exactly as a real vehicle's navigation suite would. With underwater
+   capabilities enabled it also simulates depth against a configurable sea floor
+   (`vehicle_control.sim.floor_depth_m`), honoring both `depth` and above-sea-floor
+   setpoints, and reports depth + altitudeASF in the Global Pose.
 
 Key components:
 
@@ -31,16 +34,38 @@ Key components:
   providers (on `CommandProviderBase`). Vector is mostly pass-through with validation against
   the platform speed limit. Waypoint reads its route from the large-list element topic, plans a
   Dubins path, and reports capture progress.
-- **`DubinsPathPlanner`** — a true Dubins planner. Every leg (previous waypoint or the
-  plan/replan pose, to the next waypoint) is solved as the shortest curvature-bounded Dubins
-  path over all six words (LSL/RSR/LSR/RSL/RLR/LRL, closed forms in `DubinsPath`), using the
-  platform turn radius (speed / max turn rate). The vehicle follows the planned path with a
-  pure-pursuit carrot at `lead_distance_m`, arriving at each waypoint on its commanded
-  attitude (waypoints without one get a natural fly-through heading). Elevation and speed are
-  passed through per waypoint. Capture is evaluated continuously inside the capture zone;
-  exiting the zone without a clean capture — or overflying the planned path without ever
-  entering it — counts as a miss and replans the leg from the live pose (a loop-back/spiral),
-  bounded by `max_misses_per_waypoint` and `max_replans`. On completion the planner commands
+- **`DubinsPathPlanner`** — a true Dubins planner and path tracker. Every leg (previous
+  waypoint or the plan/replan pose, to the next waypoint) is solved as the shortest
+  curvature-bounded Dubins path over all six words (LSL/RSR/LSR/RSL/RLR/LRL, closed forms in
+  `DubinsPath`). The platform capabilities drive it: the planned turn radius is the kinematic
+  minimum (speed / max turn rate) inflated by `turn_radius_margin` so the tracker keeps turn
+  authority, and every leg ends with a straight final-approach runway through the waypoint so
+  arrival happens settled on position and attitude (waypoints without an attitude requirement
+  get a natural fly-through heading).
+
+  *Tracking* is a path-frame guidance law fed by the live nav reports: commanded heading =
+  planned-path tangent (sampled ~1 s ahead for actuation phase lead) + a cross-track
+  correction `atan(xte / turn_radius)`. Cross-track error — and the UMAA track tolerance —
+  are measured against the planned Dubins path itself, not the straight lines between
+  waypoints.
+
+  *Capture* is a **gate**, not a bubble: a segment of half-width `position_m` (or the
+  waypoint's own tolerance) through the waypoint, perpendicular to the arrival heading. The
+  waypoint is captured the instant the vehicle crosses the gate plane inside the half-width
+  with attitude/elevation satisfied, so the vehicle always flies *through* the waypoint
+  (default gate half-width: 2.5 m). Crossing outside the gate or overflying the path is a
+  miss and replans the leg from the live pose, bounded by `max_misses_per_waypoint` and
+  `max_replans`.
+
+  *Depth-rate-limited legs spiral by design*: when the commanded elevation change needs more
+  time than one pass of the 2D path provides (from the platform's `max_depth_change_rate`),
+  the planner budgets the expected number of loop-back passes up front and elevation-only
+  gate failures within that budget replan for free. Because the up-front estimate uses the
+  first (usually longer) leg, the budget is recomputed from the remaining elevation error and
+  the actual loop time as passes complete — but only while the elevation keeps converging at
+  the platform depth rate, so a vehicle that cannot make depth still consumes the miss
+  budget. Both `depth` (positive down from the surface) and `asf` (altitude above the sea
+  floor, positive up) elevation frames are supported. On completion the planner commands
   zero speed.
 
 Navigation drives the control tick: the pose observer fires inside the nav consumer's
@@ -59,6 +84,14 @@ specs and capabilities reports are published once. Capabilities also feed the pl
 The app builds as part of the SDK when `BUILD_AUTOPILOT_APP=ON` (default). It requires the
 SDK's toolchain (CycloneDDS-CXX, GeographicLib, log4cxx, yaml-cpp, and the generated
 `umaa-cyclone-cxx-types`), which is provided by the SDK development container.
+
+> **Toolchain caveat (cyclonedds-cxx 0.10.5)**: `get_serialized_size` in
+> `org/eclipse/cyclonedds/topic/datatopic.hpp` caches a "fixed" serialized size per type for
+> self-contained types, but UMAA's `@optional` members make the size sample-dependent. The
+> first sample written on a thread pins the cache; any later sample whose optionals are set
+> (e.g. a waypoint execution status report that starts populating `crossTrackError`) then
+> fails `dds_write` with `Bad Parameter`. The dev environment patches the header to always
+> compute the size; verify the fix is present when building against a stock 0.10.5 install.
 
 ```bash
 mkdir build && cd build
@@ -89,22 +122,33 @@ plus its large-list route, records the vehicle track from the Global Pose report
 when the command completes.
 
 Recorded end-to-end runs (sim vehicle at 3 m/s over Cyclone DDS on one host, every command
-reaching COMPLETED with zero misses/replans) live in `docs/mission-results/`: track/waypoint
-CSVs, command status logs, and rendered plots.
+reaching COMPLETED) live in `docs/mission-results/`: mission/track/waypoint/planned-path
+CSVs, command status logs, and rendered plots. The plots overlay the executed track on the
+ideal planned Dubins route, so tracker deviation is directly visible against the plan the
+UMAA track tolerance is judged on.
 
-The baseline 5-waypoint closed loop (no attitude requirements — capture is position-only):
+The baseline 4-waypoint diamond (no attitude requirements — natural fly-through headings,
+2.5 m capture gates):
 
 ![Recorded waypoint mission](docs/mission-results/mission_plot.png)
 
 Survey lawnmower missions with **required arrival attitudes** (north/south lanes) at three
 lane spacings — 40 m (wider than the ~28.6 m planned turning circle: simple U-turns), 20 m,
 and 10 m (tighter than the planned turn radius: the Dubins solver produces bulb turns that
-swing outside the lane ends and re-enter on attitude). Two planner behaviors make these
-capture reliably: legs are planned with a turn-radius margin over the vehicle's kinematic
-minimum (`planner.turn_radius_margin`) so the controller retains authority to close tracking
-error mid-turn, and every leg ends with a straight final-approach runway through the waypoint
-so arrival happens with position and attitude already settled rather than on the tail of an
-arc.
+swing outside the lane ends and re-enter on attitude), all captured through 2.5 m gates with
+zero misses. Two planner behaviors make these capture reliably: legs are planned with a
+turn-radius margin over the vehicle's kinematic minimum (`planner.turn_radius_margin`) so
+the controller retains authority to close tracking error mid-turn, and every leg ends with a
+straight final-approach runway through the waypoint so arrival happens with position and
+attitude already settled rather than on the tail of an arc.
 
 ![Lawnmower 10 m lanes](docs/mission-results/lawnmower-10m/mission_plot.png)
 ![Lawnmower 40 m lanes](docs/mission-results/lawnmower-40m/mission_plot.png)
+
+A depth-change mission (`docs/mission-results/depth-spiral/`) exercises the spiral behavior:
+waypoints command 40 m and 25 m elevation changes (one in the `depth` frame, one in `asf`)
+while the platform's 0.2 m/s depth-rate limit makes each change impossible in a single pass
+of the 2D path. The planner budgets the loop-back passes up front, the vehicle corkscrews on
+repeated 2D replans until the elevation converges, and the passes consume no miss budget.
+
+![Depth spiral mission](docs/mission-results/depth-spiral/mission_plot.png)
