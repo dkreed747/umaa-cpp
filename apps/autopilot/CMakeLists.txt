@@ -53,10 +53,34 @@ target_link_libraries(autopilot PRIVATE autopilot-lib)
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/config/autopilot.yaml
   ${CMAKE_BINARY_DIR}/autopilot.yaml COPYONLY)
 
+# Shared UMAA consumer-side mission code (route building + command session client),
+# used by the mission runner and the mission console.
+add_library(mission-tools STATIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/tools/MissionRoute.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/tools/WaypointMissionClient.cpp)
+target_include_directories(mission-tools PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/tools)
+target_compile_options(mission-tools PRIVATE -fPIC -fpermissive)
+target_link_libraries(mission-tools PUBLIC autopilot-lib)
+
 # Mission runner: end-to-end waypoint mission driver (UMAA consumer side).
 add_executable(mission_runner ${CMAKE_CURRENT_SOURCE_DIR}/tools/mission_runner.cpp)
 target_compile_options(mission_runner PRIVATE -fPIC -fpermissive)
-target_link_libraries(mission_runner PRIVATE autopilot-lib)
+target_link_libraries(mission_runner PRIVATE mission-tools)
+
+# Mission console: live monitoring + mission-command web GUI (REST/SSE bridge to DDS).
+add_executable(mission_console ${CMAKE_CURRENT_SOURCE_DIR}/tools/mission_console.cpp)
+target_include_directories(mission_console SYSTEM PRIVATE
+  ${PROJECT_SOURCE_DIR}/third-party/httplib
+  ${PROJECT_SOURCE_DIR}/third-party)
+target_compile_options(mission_console PRIVATE -fPIC -fpermissive)
+target_link_libraries(mission_console PRIVATE mission-tools)
+find_package(Threads REQUIRED)
+target_link_libraries(mission_console PRIVATE Threads::Threads)
+
+# The console GUI is served from a web root next to the binary.
+add_custom_command(TARGET mission_console POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/web ${CMAKE_BINARY_DIR}/web)
 
 # Unit/integration tests reuse the SDK's GoogleTest + LocalReaderSender loopback IO,
 # which are only available when the SDK test tree is enabled.

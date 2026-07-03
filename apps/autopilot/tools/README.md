@@ -1,5 +1,49 @@
 # Autopilot tools
 
+Both tools are the UMAA *consumer* side of the autopilot's Global Waypoint control service,
+built on the shared `WaypointMissionClient` (command + large-list route out; ack, command
+status, and execution status back) and `MissionRoute` (waypoint construction) sources in
+this directory.
+
+## `mission_console`
+
+Live mission-control web GUI. The C++ backend bridges the DDS bus to a single-page
+browser app (no external web dependencies — works on an air-gapped network):
+
+```bash
+# alongside a running autopilot (same YAML/domain):
+./apps/autopilot/mission_console autopilot.yaml 8080 web
+# then open http://localhost:8080/
+```
+
+- Subscribes to the three SA navigation reports plus the waypoint command ack / status /
+  execution-status topics, and streams a JSON state snapshot to the browser over
+  server-sent events (~5 Hz). REST endpoints: `GET /api/state`, `GET /api/stream`,
+  `POST /api/mission`, `POST /api/mission/cancel`, `POST /api/preview`.
+- The chart plots the vehicle (heading, trail) on a local-tangent-plane graticule with
+  pan/zoom, the active mission's waypoints (capture gates, arrival-attitude arrows,
+  completed waypoints faded, the current one pulsing), the ideal planned Dubins route, and
+  an animated dashed line for the active leg. The right panel carries position / heading /
+  speed / depth / altitude-above-floor readouts plus execution details (distance to
+  waypoint, cross-track error, waypoints remaining) and the command status history.
+- **New mission**: click the chart to drop waypoints; click a waypoint (marker or list row)
+  to edit its speed, capture radius, optional arrival heading, and optional elevation
+  (depth or above-sea-floor). The ideal Dubins route for the draft is previewed live from
+  the vehicle's current pose (`POST /api/preview` -> `DubinsPathPlanner::previewRoute`).
+- The **EXECUTE** button publishes the route as a UMAA large list plus the referencing
+  command, then turns into **CANCEL** (which disposes the command instance — the UMAA
+  cancellation request) until the session reaches a terminal state. Chips above it show
+  the live command status and whether the provider's command acknowledgement was received.
+- Clicking a waypoint mid-mission shows its parameters, the session's command status/ack,
+  and — for the current waypoint — the live achieved flags from the execution status
+  report.
+
+Screenshots (recorded against the sim vehicle): `../docs/console/`.
+
+The backend serves static files from the web root passed as the third argument (CMake
+copies `tools/web/` next to the build output). It uses the vendored single-header
+`third-party/httplib` (HTTP/SSE) and `third-party/nlohmann` (JSON).
+
 ## `mission_runner`
 
 End-to-end waypoint mission driver: the UMAA *consumer* side of the autopilot's Global

@@ -154,3 +154,16 @@ of the 2D path. The planner budgets the loop-back passes up front, the vehicle c
 repeated 2D replans until the elevation converges, and the passes consume no miss budget.
 
 ![Depth spiral mission](docs/mission-results/depth-spiral/mission_plot.png)
+
+## Mission console
+
+`tools/mission_console` serves a live mission-control web GUI (self-contained, no external
+web dependencies): the vehicle and its trail on a pan/zoom chart, the active mission's
+waypoints with per-waypoint status (completed faded, current pulsing, animated active
+leg), the ideal planned Dubins route, live readouts (position, heading, speed, depth,
+altitude above floor, cross-track error, distances), and a click-to-build mission editor
+with per-waypoint speed / capture / arrival-heading / elevation, a Dubins route preview,
+and an EXECUTE/CANCEL button wired to the full UMAA command lifecycle (ack + status
+surfaced in the GUI). See `tools/README.md`.
+
+![Mission console executing](docs/console/console_executing.png)
