@@ -19,16 +19,24 @@
 //! provider) plus its large-list route, then records the vehicle's Global Pose track and the
 //! command status until the mission completes. Outputs:
 //!   <out>/track.csv      elapsed_s, lat_deg, lon_deg, yaw_rad, speed_mps
-//!   <out>/waypoints.csv  index, lat_deg, lon_deg, capture_radius_m
+//!   <out>/waypoints.csv  index, lat_deg, lon_deg, capture_radius_m, arrival_yaw_rad
 //!   <out>/status.log     command status transitions
-//! Usage: mission_runner [autopilot.yaml] [output-dir]
+//! Usage: mission_runner [autopilot.yaml] [output-dir] [mission.csv]
+//!
+//! The optional mission CSV defines the route in the local tangent plane at the sim start,
+//! one waypoint per line: east_m,north_m,speed_mps,capture_radius_m[,arrival_yaw_rad]
+//! (header line ignored; leave arrival_yaw_rad empty for no attitude requirement). Without a
+//! mission file a built-in closed loop with turns in both directions is flown.
 
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <memory>
 #include <filesystem>  // NOLINT(build/c++17)
 #include <fstream>
 #include <iostream>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -69,11 +77,46 @@ using CommandStatusEnumType =
 
 //! \brief One mission waypoint expressed in the local tangent plane at the sim start.
 struct LocalWaypoint {
-  double eastM;
-  double northM;
-  double speedMps;
-  double captureRadiusM;
+  double eastM = 0.0;
+  double northM = 0.0;
+  double speedMps = 3.0;
+  double captureRadiusM = 10.0;
+  std::optional<double> arrivalYawRad;
 };
+
+//! \brief Parse a mission CSV (east_m,north_m,speed_mps,capture_radius_m[,arrival_yaw_rad]).
+std::vector<LocalWaypoint> loadMissionCsv(const std::string& path) {
+  std::vector<LocalWaypoint> route;
+  std::ifstream in(path);
+  if (!in) {
+    return route;
+  }
+  std::string line;
+  while (std::getline(in, line)) {
+    if (line.empty() || std::isalpha(static_cast<unsigned char>(line[0]))) {
+      continue;  // header/comment
+    }
+    std::stringstream ss(line);
+    std::string field;
+    std::vector<std::string> fields;
+    while (std::getline(ss, field, ',')) {
+      fields.push_back(field);
+    }
+    if (fields.size() < 4) {
+      continue;
+    }
+    LocalWaypoint lw;
+    lw.eastM = std::stod(fields[0]);
+    lw.northM = std::stod(fields[1]);
+    lw.speedMps = std::stod(fields[2]);
+    lw.captureRadiusM = std::stod(fields[3]);
+    if (fields.size() >= 5 && !fields[4].empty()) {
+      lw.arrivalYawRad = std::stod(fields[4]);
+    }
+    route.push_back(lw);
+  }
+  return route;
+}
 
 GlobalWaypointType makeWaypoint(const GeographicLib::LocalCartesian& frame, const LocalWaypoint& lw) {
   double lat = 0.0;
@@ -95,6 +138,11 @@ GlobalWaypointType makeWaypoint(const GeographicLib::LocalCartesian& frame, cons
   wp.speed().VariableSpeedVariantTypeSubtypes().RequiredSpeedVariantVariant().speed()
       .SpeedRequirementVariantTypeSubtypes().GroundSpeedRequirementVariantVariant().speed()
       .speed(lw.speedMps);
+  if (lw.arrivalYawRad.has_value()) {
+    UMAA::Common::Orientation::Orientation3DNEDRequirement att;
+    att.yawZ().yaw().yaw(lw.arrivalYawRad.value());
+    wp.attitude() = att;
+  }
   wp.waypointID() = arlcore::UuidFactory::getInstance().generateGuid().getGuid();
   return wp;
 }
@@ -116,6 +164,7 @@ std::string statusName(CommandStatusEnumType s) {
 int main(int argc, char** argv) {
   const std::string configPath = (argc > 1) ? argv[1] : "autopilot.yaml";
   const std::string outDir = (argc > 2) ? argv[2] : "mission-out";
+  const std::string missionPath = (argc > 3) ? argv[3] : "";
 
   arlcore::autopilot::AutopilotConfig config;
   if (!arlcore::autopilot::YamlConfigLoader::load(configPath, &config)) {
@@ -129,17 +178,29 @@ int main(int argc, char** argv) {
   const auto rqos = qosProvider.datareader_qos();
   const auto wqos = qosProvider.datawriter_qos();
 
-  // The mission: a closed loop with turns in both directions, relative to the sim start.
+  // The mission: from the CSV when given, otherwise a built-in closed loop with turns in
+  // both directions. Coordinates are relative to the sim start.
   GeographicLib::LocalCartesian frame(config.simVehicle.initialLatitudeDeg,
                                       config.simVehicle.initialLongitudeDeg, 0.0);
   const double v = 3.0;
-  const std::vector<LocalWaypoint> localRoute = {
-      {0.0, 350.0, v, 12.0},
-      {250.0, 600.0, v, 12.0},
-      {500.0, 350.0, v, 12.0},
-      {250.0, 100.0, v, 12.0},
-      {-50.0, 350.0, v, 12.0},
-  };
+  std::vector<LocalWaypoint> localRoute;
+  if (!missionPath.empty()) {
+    localRoute = loadMissionCsv(missionPath);
+    if (localRoute.empty()) {
+      std::cerr << "Failed to load mission from " << missionPath << std::endl;
+      return 1;
+    }
+    std::cout << "Loaded mission from " << missionPath << " (" << localRoute.size()
+              << " waypoints)" << std::endl;
+  } else {
+    localRoute = {
+        {0.0, 350.0, v, 12.0, std::nullopt},
+        {250.0, 600.0, v, 12.0, std::nullopt},
+        {500.0, 350.0, v, 12.0, std::nullopt},
+        {250.0, 100.0, v, 12.0, std::nullopt},
+        {-50.0, 350.0, v, 12.0, std::nullopt},
+    };
+  }
   std::vector<GlobalWaypointType> waypoints;
   for (const LocalWaypoint& lw : localRoute) {
     waypoints.push_back(makeWaypoint(frame, lw));
@@ -148,11 +209,15 @@ int main(int argc, char** argv) {
   {
     std::ofstream wpCsv(outDir + "/waypoints.csv");
     wpCsv.precision(10);
-    wpCsv << "index,lat_deg,lon_deg,capture_radius_m\n";
+    wpCsv << "index,lat_deg,lon_deg,capture_radius_m,arrival_yaw_rad\n";
     for (std::size_t i = 0; i < waypoints.size(); i++) {
       wpCsv << i << "," << waypoints[i].position().value().geodeticLatitude() << ","
             << waypoints[i].position().value().geodeticLongitude() << ","
-            << localRoute[i].captureRadiusM << "\n";
+            << localRoute[i].captureRadiusM << ",";
+      if (localRoute[i].arrivalYawRad.has_value()) {
+        wpCsv << localRoute[i].arrivalYawRad.value();
+      }
+      wpCsv << "\n";
     }
   }
 

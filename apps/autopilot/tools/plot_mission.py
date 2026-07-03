@@ -59,12 +59,14 @@ def main():
     t = [float(r["elapsed_s"]) for r in track]
     east, north = zip(*[to_local(float(r["lat_deg"]), float(r["lon_deg"])) for r in track])
     speed = [float(r["speed_mps"]) for r in track]
-    wp_e, wp_n, wp_r = [], [], []
+    wp_e, wp_n, wp_r, wp_yaw = [], [], [], []
     for r in waypoints:
         e, n = to_local(float(r["lat_deg"]), float(r["lon_deg"]))
         wp_e.append(e)
         wp_n.append(n)
         wp_r.append(float(r["capture_radius_m"]))
+        yaw = r.get("arrival_yaw_rad", "")
+        wp_yaw.append(float(yaw) if yaw not in (None, "") else None)
 
     fig = plt.figure(figsize=(14, 9), constrained_layout=True)
     grid = fig.add_gridspec(2, 2, width_ratios=[1.4, 1.0])
@@ -79,12 +81,24 @@ def main():
             linestyle="none", label="end", zorder=5)
     ax.plot(wp_e, wp_n, linestyle="--", color="#9c6b4e", linewidth=1.0, alpha=0.7,
             label="planned route (waypoint order)", zorder=2)
-    for i, (e, n, r) in enumerate(zip(wp_e, wp_n, wp_r)):
+    span = max(max(wp_n) - min(wp_n), max(wp_e) - min(wp_e), 1.0)
+    arrow_len = 0.06 * span
+    has_attitude = False
+    for i, (e, n, r, yaw) in enumerate(zip(wp_e, wp_n, wp_r, wp_yaw)):
         ax.add_patch(plt.Circle((e, n), r, facecolor="none", edgecolor="#a3770a",
                                 linewidth=1.4, zorder=4))
-        ax.annotate(f"WP{i + 1}", (e, n), textcoords="offset points", xytext=(8, 8),
-                    fontsize=10, color="#6f6f6f")
+        # Alternate label offsets so dense waypoint rows stay legible.
+        ax.annotate(f"WP{i + 1}", (e, n), textcoords="offset points",
+                    xytext=(8, 8 if i % 2 == 0 else -16), fontsize=10, color="#6f6f6f")
+        if yaw is not None:
+            has_attitude = True
+            ax.annotate("", xy=(e + arrow_len * math.sin(yaw), n + arrow_len * math.cos(yaw)),
+                        xytext=(e, n),
+                        arrowprops=dict(arrowstyle="-|>", color="#6cc5b0", linewidth=1.6),
+                        zorder=6)
     ax.plot([], [], color="#a3770a", label="capture radius")
+    if has_attitude:
+        ax.plot([], [], color="#6cc5b0", label="required arrival attitude")
     ax.set_xlabel("east (m)")
     ax.set_ylabel("north (m)")
     ax.set_title("Ground track vs planned waypoints")

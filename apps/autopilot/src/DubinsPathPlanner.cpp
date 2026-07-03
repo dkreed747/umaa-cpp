@@ -22,7 +22,7 @@
 #include <optional>
 #include <vector>
 
-#include "GeographicUtils.h"
+#include "AngleMath.h"
 #include "Logger.h"
 #include "ToleranceUtils.h"
 
@@ -42,8 +42,8 @@ double wpLon(const GlobalWaypointType& w) { return w.position().value().geodetic
 
 //! \brief Azimuth (true north, clockwise) <-> math angle (+x east, counterclockwise).
 //! The mapping is its own inverse.
-double azToMath(double azRad) { return arlcore::Unwind(M_PI_2 - azRad); }
-double mathToAz(double mathRad) { return arlcore::Unwind(M_PI_2 - mathRad); }
+double azToMath(double azRad) { return wrapPi(M_PI_2 - azRad); }
+double mathToAz(double mathRad) { return wrapPi(M_PI_2 - mathRad); }
 
 //! \brief Current pose elevation in the requested frame, if available.
 std::optional<double> poseElevation(const GlobalPoseReportType& p, ElevationFrame frame) {
@@ -77,11 +77,13 @@ void DubinsPathPlanner::toLocal(double latDeg, double lonDeg, double* xE, double
 }
 
 Dubins2DPose DubinsPathPlanner::sampleExtended(const Leg& leg, double sM) {
-  if (sM <= leg.lengthM) {
+  if (sM <= leg.dubinsLengthM) {
     return leg.path.sample(sM);
   }
-  Dubins2DPose end = leg.path.sample(leg.lengthM);
-  const double over = sM - leg.lengthM;
+  // Straight continuation covers both the final-approach runway (up to lengthM, ending at
+  // the waypoint) and the fly-through extension beyond it.
+  Dubins2DPose end = leg.path.sample(leg.dubinsLengthM);
+  const double over = sM - leg.dubinsLengthM;
   end.x += over * std::cos(end.theta);
   end.y += over * std::sin(end.theta);
   return end;
@@ -111,14 +113,19 @@ double DubinsPathPlanner::arrivalAzimuth(std::size_t wpIndex, double fromXE, dou
 
 DubinsPathPlanner::Leg DubinsPathPlanner::buildLeg(const Dubins2DPose& startPose, std::size_t wpIndex) const {
   const double endAz = arrivalAzimuth(wpIndex, startPose.x, startPose.y);
-  const Dubins2DPose goal{wpX_[wpIndex], wpY_[wpIndex], azToMath(endAz)};
-  std::optional<DubinsPath> path = DubinsPath::solve(startPose, goal, params_.turnRadiusM);
+  const double endTheta = azToMath(endAz);
+  // Solve the curved portion to a virtual goal one turn radius short of the waypoint along
+  // the arrival bearing; the leg then finishes with a straight runway through the waypoint.
+  const double runwayM = params_.turnRadiusM;
+  const Dubins2DPose virtualGoal{wpX_[wpIndex] - runwayM * std::cos(endTheta),
+                                 wpY_[wpIndex] - runwayM * std::sin(endTheta), endTheta};
+  std::optional<DubinsPath> path = DubinsPath::solve(startPose, virtualGoal, params_.turnRadiusM);
   if (!path.has_value()) {
     // solve() only fails on non-finite input; fall back to a degenerate straight run from a
     // sanitized origin so guidance can still make progress.
-    path = DubinsPath::solve({0.0, 0.0, 0.0}, goal, 0.0);
+    path = DubinsPath::solve({0.0, 0.0, 0.0}, virtualGoal, 0.0);
   }
-  return Leg(path.value(), endAz);
+  return Leg(path.value(), runwayM, endAz);
 }
 
 void DubinsPathPlanner::plan(const std::vector<GlobalWaypointType>& waypoints,
@@ -320,8 +327,13 @@ ControlVector DubinsPathPlanner::update(const GlobalPoseReportType& pose) {
     legProgressS_ = bestS;
   }
 
-  // Carrot at the lead distance along the (extended) path.
-  const Dubins2DPose carrot = sampleExtended(leg, legProgressS_ + lead);
+  // Carrot at the lead distance along the (extended) path. The lead tightens on final
+  // approach so arc-cutting error at arrival stays inside the capture radius; the floor
+  // (a fraction of the turn radius) keeps the pursuit stable for a rate-limited vehicle.
+  const double remainingM = std::max(0.0, leg.lengthM - legProgressS_);
+  const double carrotLead = std::max(std::min(lead, 0.7 * remainingM + params_.sampleStepM),
+                                     std::max(0.8 * params_.turnRadiusM, 2.0 * params_.sampleStepM));
+  const Dubins2DPose carrot = sampleExtended(leg, legProgressS_ + carrotLead);
   const double carrotX = carrot.x;
   const double carrotY = carrot.y;
 
@@ -377,9 +389,14 @@ ControlVector DubinsPathPlanner::update(const GlobalPoseReportType& pose) {
       }
     }
   } else if (withinCaptureZone_) {
-    // Falling edge: exited the capture zone without capturing.
     withinCaptureZone_ = false;
-    registerMiss(current);
+    // Falling edge: exited the capture zone without capturing. Only count it as a miss when
+    // it happened on final approach — in dense waypoint fields (e.g. lawnmower lanes spaced
+    // tighter than the turning circle) the planned path legitimately crosses the target's
+    // capture zone mid-turn, and the path itself will bring the vehicle back for arrival.
+    if (legProgressS_ > leg.lengthM - (lead + 2.0 * positionToleranceM(wp, params_))) {
+      registerMiss(current);
+    }
   } else if (legProgressS_ > leg.lengthM + overshootBudget - 1e-9) {
     // Overflew the end of the planned path without ever entering the capture zone (the
     // capture radius is smaller than our tracking error): loop back around.

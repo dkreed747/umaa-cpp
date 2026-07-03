@@ -15,15 +15,19 @@ vehicle's configured start position.
 # terminal 1 (from the build directory): the autopilot with the sim vehicle
 ./apps/autopilot/autopilot autopilot.yaml
 
-# terminal 2: run the mission and record outputs
+# terminal 2: run the built-in mission and record outputs
 ./apps/autopilot/mission_runner autopilot.yaml mission-out
+
+# ... or fly a custom route (local tangent-plane CSV, one waypoint per line:
+# east_m,north_m,speed_mps,capture_radius_m[,arrival_yaw_rad])
+./apps/autopilot/mission_runner autopilot.yaml mission-out my-mission.csv
 ```
 
 Outputs in the chosen directory:
 
 - `track.csv` — `elapsed_s, lat_deg, lon_deg, yaw_rad, speed_mps` sampled from the SA
   Global Pose / Speed reports.
-- `waypoints.csv` — the planned route: `index, lat_deg, lon_deg, capture_radius_m`.
+- `waypoints.csv` — the planned route: `index, lat_deg, lon_deg, capture_radius_m, arrival_yaw_rad`.
 - `status.log` — command status transitions and the final state.
 
 Exit code 0 iff the command COMPLETED.

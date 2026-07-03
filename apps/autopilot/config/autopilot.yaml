@@ -47,6 +47,7 @@ tolerances:
 planner:
   lead_distance_m: 50
   default_radius_of_curvature_m: 25.0
+  turn_radius_margin: 1.25       # planned radius = margin * min turning radius
   max_list_wait_cycles: 200
   max_misses_per_waypoint: 3
   elevation_counts_as_miss: true

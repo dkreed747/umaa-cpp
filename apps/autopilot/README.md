@@ -88,9 +88,23 @@ runs green with `ctest`. An end-to-end waypoint mission over Cyclone DDS is exer
 plus its large-list route, records the vehicle track from the Global Pose reports, and exits
 when the command completes.
 
-A recorded end-to-end run (5-waypoint closed loop, sim vehicle at 3 m/s over Cyclone DDS on
-one host, command reached COMPLETED in 597 s with no misses or replans) lives in
-`docs/mission-results/`: the track/waypoint CSVs, the command status log, and the rendered
-plot below.
+Recorded end-to-end runs (sim vehicle at 3 m/s over Cyclone DDS on one host, every command
+reaching COMPLETED with zero misses/replans) live in `docs/mission-results/`: track/waypoint
+CSVs, command status logs, and rendered plots.
+
+The baseline 5-waypoint closed loop (no attitude requirements — capture is position-only):
 
 ![Recorded waypoint mission](docs/mission-results/mission_plot.png)
+
+Survey lawnmower missions with **required arrival attitudes** (north/south lanes) at three
+lane spacings — 40 m (wider than the ~28.6 m planned turning circle: simple U-turns), 20 m,
+and 10 m (tighter than the planned turn radius: the Dubins solver produces bulb turns that
+swing outside the lane ends and re-enter on attitude). Two planner behaviors make these
+capture reliably: legs are planned with a turn-radius margin over the vehicle's kinematic
+minimum (`planner.turn_radius_margin`) so the controller retains authority to close tracking
+error mid-turn, and every leg ends with a straight final-approach runway through the waypoint
+so arrival happens with position and attitude already settled rather than on the tail of an
+arc.
+
+![Lawnmower 10 m lanes](docs/mission-results/lawnmower-10m/mission_plot.png)
+![Lawnmower 40 m lanes](docs/mission-results/lawnmower-40m/mission_plot.png)

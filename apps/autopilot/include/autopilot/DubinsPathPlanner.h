@@ -81,11 +81,17 @@ class DubinsPathPlanner {
   bool hasRoute() const { return !waypoints_.empty(); }
 
  private:
-  //! \brief One planned leg: the Dubins path from the leg start pose to its target waypoint.
+  //! \brief One planned leg: a Dubins path to a virtual goal short of the waypoint plus a
+  //! straight final-approach runway through the waypoint. Arriving along a straight (instead
+  //! of on the tail of an arc) lets the pursuit settle position and attitude before capture.
   struct Leg {
-    Leg(const DubinsPath& p, double endAz) : path(p), lengthM(p.lengthM()), endAzimuthRad(endAz) {}
-    DubinsPath path;      // in the local tangent plane (math convention)
-    double lengthM;
+    Leg(const DubinsPath& p, double runway, double endAz)
+        : path(p), dubinsLengthM(p.lengthM()), runwayM(runway),
+          lengthM(p.lengthM() + runway), endAzimuthRad(endAz) {}
+    DubinsPath path;       // in the local tangent plane (math convention)
+    double dubinsLengthM;  // curved portion (ends at the virtual goal)
+    double runwayM;        // straight final approach ending at the waypoint
+    double lengthM;        // dubinsLengthM + runwayM
     double endAzimuthRad;  // arrival azimuth at the waypoint (true-north, [-pi, pi])
   };
 

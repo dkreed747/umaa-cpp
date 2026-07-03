@@ -23,7 +23,7 @@
 #include <optional>
 #include <utility>
 
-#include "GeographicUtils.h"
+#include "AngleMath.h"
 #include "Logger.h"
 
 namespace arlcore::autopilot {
@@ -152,10 +152,10 @@ void SimVehicleControl::stepOnce(double dtS) {
     targetSpeed = std::clamp(targetSpeed, -maxReverseSpeedMps(), maxForwardSpeedMps());
 
     // Turn toward the commanded heading, limited by the platform's max turn rate.
-    const double headingErr = arlcore::Unwind(targetHeading - headingRad_);
+    const double headingErr = wrapPi(targetHeading - headingRad_);
     const double maxDelta = maxTurnRateRps() * dtS;
     const double applied = std::clamp(headingErr, -maxDelta, maxDelta);
-    headingRad_ = arlcore::Unwind(headingRad_ + applied);
+    headingRad_ = wrapPi(headingRad_ + applied);
     yawRateRps_ = applied / dtS;
 
     // Accelerate toward the commanded speed, limited by the surge acceleration.

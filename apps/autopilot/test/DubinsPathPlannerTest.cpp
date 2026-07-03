@@ -22,7 +22,7 @@
 #include <GeographicLib/LocalCartesian.hpp>
 
 #include "DubinsPathPlanner.h"
-#include "GeographicUtils.h"
+#include "AngleMath.h"
 
 namespace arlcore::autopilot {
 
@@ -60,9 +60,9 @@ struct SimVehicle {
   }
 
   void step(const ControlVector& cv, double dtS) {
-    const double err = arlcore::Unwind(cv.headingRad - yawRad);
+    const double err = wrapPi(cv.headingRad - yawRad);
     const double maxDelta = maxTurnRateRps * dtS;
-    yawRad = arlcore::Unwind(yawRad + std::clamp(err, -maxDelta, maxDelta));
+    yawRad = wrapPi(yawRad + std::clamp(err, -maxDelta, maxDelta));
     speedMps = cv.speedMps;
     xE += speedMps * dtS * std::sin(yawRad);
     yN += speedMps * dtS * std::cos(yawRad);
@@ -169,7 +169,7 @@ TEST(DubinsPathPlannerTest, HonorsArrivalAttitude) {
   EXPECT_TRUE(planner.routeComplete());
   EXPECT_FALSE(planner.failed());
   // The capture criteria include attitude, so at capture the vehicle yaw was within tolerance.
-  EXPECT_LE(std::fabs(arlcore::Unwind(vehicle.yawRad - arrivalYaw)), 0.35 + 0.1);
+  EXPECT_LE(std::fabs(wrapPi(vehicle.yawRad - arrivalYaw)), 0.35 + 0.1);
 }
 
 TEST(DubinsPathPlannerTest, WaypointBehindVehicleLoopsAround) {
@@ -259,6 +259,37 @@ TEST(DubinsPathPlannerTest, TightTurnRadiusWithLongLeadStillCaptures) {
 
   runMission(&planner, &vehicle, 20000);
   EXPECT_TRUE(planner.routeComplete());
+  EXPECT_FALSE(planner.failed());
+}
+
+TEST(DubinsPathPlannerTest, DenseLawnmowerWithArrivalAttitudes) {
+  // Survey lawnmower: north/south lanes with required arrival attitudes, lane spacing (10 m)
+  // tighter than the turning circle diameter (~23 m), forcing bulb turns whose planned path
+  // crosses neighboring capture zones mid-turn. Those crossings must not burn the miss budget.
+  DubinsPathPlanner planner;
+  SimVehicle vehicle;
+  vehicle.maxTurnRateRps = 0.2618;
+  PlannerParams params = testParams();
+  params.turnRadiusM = 3.0 / 0.2618;
+  params.leadDistanceM = 50.0;
+  params.posCaptureM = 5.0;
+  const double north = 0.0;
+  const double south = M_PI;
+  std::vector<GlobalWaypointType> route;
+  const double y0 = 100.0;
+  const double y1 = 300.0;
+  for (int lane = 0; lane < 4; lane++) {
+    const double x = 10.0 * lane;
+    const bool up = (lane % 2 == 0);
+    const double yaw = up ? north : south;
+    route.push_back(makeWaypoint(x, up ? y0 : y1, 3.0, yaw));
+    route.push_back(makeWaypoint(x, up ? y1 : y0, 3.0, yaw));
+  }
+  planner.plan(route, vehicle.pose(), params);
+
+  runMission(&planner, &vehicle, 20000, 0.1);
+  EXPECT_TRUE(planner.routeComplete()) << "target " << planner.progress().waypointsRemaining
+      << " remaining, dist " << planner.progress().distanceToWaypointM;
   EXPECT_FALSE(planner.failed());
 }
 

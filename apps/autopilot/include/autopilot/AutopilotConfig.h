@@ -70,6 +70,7 @@ struct WaypointToleranceConfig {
 struct PlannerConfig {
   double leadDistanceM = 50.0;
   double defaultRadiusOfCurvatureM = 25.0;
+  double turnRadiusMargin = 1.25;  // planned radius = margin * (speed / max turn rate)
   int maxListWaitCycles = 200;
   int maxMissesPerWaypoint = 3;
   bool elevationCountsAsMiss = true;

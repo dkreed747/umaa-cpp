@@ -18,7 +18,7 @@
 
 #include <cmath>
 
-#include "GeographicUtils.h"
+#include "AngleMath.h"
 #include "Logger.h"
 
 namespace arlcore::autopilot::tolerance {
@@ -174,7 +174,7 @@ std::optional<double> extractTrackToleranceM(
 }
 
 bool directionAchieved(const DirectionValue& dir, double actualRad, double defaultTolRad) {
-  const double err = arlcore::Unwind(actualRad - dir.headingRad);
+  const double err = wrapPi(actualRad - dir.headingRad);
   if (dir.ccwToleranceRad.has_value() || dir.cwToleranceRad.has_value()) {
     // err < 0 is counterclockwise of the setpoint, err > 0 clockwise.
     const double ccw = dir.ccwToleranceRad.value_or(0.0);
@@ -209,7 +209,7 @@ bool attitudeAchieved(const AttitudeValue& attitude, double actualYawRad, double
     }
     return rel <= spanNorm;
   }
-  return std::fabs(arlcore::Unwind(actualYawRad - attitude.yawRad)) <= defaultTolRad;
+  return std::fabs(wrapPi(actualYawRad - attitude.yawRad)) <= defaultTolRad;
 }
 
 }  // namespace arlcore::autopilot::tolerance

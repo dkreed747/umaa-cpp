@@ -117,6 +117,7 @@ bool YamlConfigLoader::load(const std::string& path, AutopilotConfig* out) {
   const YAML::Node planner = root["planner"];
   readScalar(planner, "lead_distance_m", &out->planner.leadDistanceM);
   readScalar(planner, "default_radius_of_curvature_m", &out->planner.defaultRadiusOfCurvatureM);
+  readScalar(planner, "turn_radius_margin", &out->planner.turnRadiusMargin);
   readScalar(planner, "max_list_wait_cycles", &out->planner.maxListWaitCycles);
   readScalar(planner, "max_misses_per_waypoint", &out->planner.maxMissesPerWaypoint);
   readScalar(planner, "elevation_counts_as_miss", &out->planner.elevationCountsAsMiss);

@@ -19,7 +19,7 @@
 #include <cmath>
 #include <memory>
 
-#include "GeographicUtils.h"
+#include "AngleMath.h"
 #include "LocalReaderSender.h"
 #include "SimVehicleControl.h"
 #include "UuidFactory.h"

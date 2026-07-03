@@ -20,7 +20,7 @@
 #include <optional>
 #include <vector>
 
-#include "GeographicUtils.h"
+#include "AngleMath.h"
 #include "Logger.h"
 #include "ToleranceUtils.h"
 
@@ -63,13 +63,16 @@ PlannerParams AutopilotBrain::derivePlannerParams() const {
   p.elevationCountsAsMiss = config_.planner.elevationCountsAsMiss;
   p.maxReplans = config_.planner.maxReplans;
 
-  // Turn radius = representative speed / max turn rate, from the surface capabilities.
+  // Turn radius = representative speed / max turn rate, from the surface capabilities,
+  // inflated by the configured margin: planning at exactly the vehicle's minimum radius
+  // leaves no turn authority to close tracking error during rate-saturated maneuvers.
   const CapabilityLimits& surf = config_.platformCapabilities.surface;
   const std::optional<double> speed = surf.cruisingSpeedMps.has_value() ? surf.cruisingSpeedMps
                                                                         : surf.maxForwardSpeedMps;
   p.turnRadiusM = config_.planner.defaultRadiusOfCurvatureM;
   if (speed.has_value() && surf.maxTurnRateRps.has_value() && surf.maxTurnRateRps.value() > 0.0) {
-    p.turnRadiusM = speed.value() / surf.maxTurnRateRps.value();
+    p.turnRadiusM = std::max(1.0, config_.planner.turnRadiusMargin) * speed.value() /
+                    surf.maxTurnRateRps.value();
   }
   return p;
 }
