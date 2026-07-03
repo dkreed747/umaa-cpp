@@ -85,13 +85,15 @@ The app builds as part of the SDK when `BUILD_AUTOPILOT_APP=ON` (default). It re
 SDK's toolchain (CycloneDDS-CXX, GeographicLib, log4cxx, yaml-cpp, and the generated
 `umaa-cyclone-cxx-types`), which is provided by the SDK development container.
 
-> **Toolchain caveat (cyclonedds-cxx 0.10.5)**: `get_serialized_size` in
-> `org/eclipse/cyclonedds/topic/datatopic.hpp` caches a "fixed" serialized size per type for
-> self-contained types, but UMAA's `@optional` members make the size sample-dependent. The
-> first sample written on a thread pins the cache; any later sample whose optionals are set
-> (e.g. a waypoint execution status report that starts populating `crossTrackError`) then
-> fails `dds_write` with `Bad Parameter`. The dev environment patches the header to always
-> compute the size; verify the fix is present when building against a stock 0.10.5 install.
+> **Toolchain baseline**: build against CycloneDDS/CycloneDDS-CXX **master** (validated at
+> `cyclonedds@8425e2e343` + `cyclonedds-cxx@53a9f114e6`, July 2026), not the 0.10.5 release.
+> The 0.10.5 release needs several patches this codebase no longer carries: C++20 rejects its
+> template-id destructors, `QosProviderDelegate` is declared but not implemented (the QoS XML
+> profiles silently cannot load), topic names containing `::` are rejected, and — worst —
+> types with `@optional` members (most UMAA reports) hit a fixed-size serialization cache, so
+> a sample whose optionals are set after a smaller first write fails `dds_write` with
+> `Bad Parameter`. All of these are fixed upstream on master, and the generated types build
+> from the vendored IDLs with a stock `idlc -l cxx` invocation.
 
 ```bash
 mkdir build && cd build

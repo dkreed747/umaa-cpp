@@ -104,13 +104,12 @@ class CycloneSender : public SenderBase<DataType> {
   //! \return     A SendStatus Enum indicating the results of the dispose function.
   SendStatus dispose(const DataType& data) override {
     std::lock_guard<std::mutex> lock(writerLock_);
-    auto instanceHandle = writer_.lookup_instance(data);
-
-    if (instanceHandle == dds::core::InstanceHandle::nil()) {
-      return SendStatus::ERROR;
-    }
+    // Dispose by sample (the key fields identify the instance) rather than resolving an
+    // instance handle first: dds_dispose matches the instance from the key directly, which
+    // also works on CycloneDDS versions where DataWriter::lookup_instance fails to match
+    // previously written samples.
     try {
-      writer_.dispose_instance(instanceHandle);
+      writer_.dispose_instance(data);
     } catch(const std::exception& e) {
       UMAA_LOG_ERROR(util::SYSTEM_LOGGER, e.what())
       return SendStatus::ERROR;
