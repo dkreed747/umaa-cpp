@@ -23,9 +23,10 @@ namespace arlcore::autopilot {
 
 //! \brief The reference frame an elevation/depth setpoint is expressed in.
 enum class ElevationFrame {
-  DEPTH,            // meters below sea level (positive down)
-  ALTITUDE_MSL,     // meters above mean sea level
-  ALTITUDE_AGL,     // meters above ground level
+  DEPTH,             // meters below the surface (positive down, 0 at the surface)
+  ALTITUDE_MSL,      // meters above mean sea level
+  ALTITUDE_AGL,      // meters above ground level
+  ALTITUDE_ASF,      // meters above the sea floor (positive up, 0 at the floor)
   ALTITUDE_GEODETIC  // meters above the WGS84 ellipsoid
 };
 

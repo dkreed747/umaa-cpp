@@ -143,6 +143,48 @@ TEST(SimVehicleControlTest, VelocityReportMatchesHeadingAndSpeed) {
   EXPECT_NEAR(velocity.velocity().northSpeed(), 0.0, 1e-6);
 }
 
+TEST(SimVehicleControlTest, DrivesDepthAndPublishesAltitudeAboveSeaFloor) {
+  SimFixture f;
+  f.caps.underwaterEnabled = true;
+  f.caps.underwater.maxDepthChangeRateMps = 1.0;
+  f.sim.floorDepthM = 50.0;
+  auto vehicle = f.make();
+
+  ControlVector cv = makeCv(0.0, 0.0);
+  cv.elevationM = 20.0;
+  cv.elevationFrame = ElevationFrame::DEPTH;
+  vehicle->sendControlVector(cv);
+  for (int i = 0; i < 300; i++) {
+    vehicle->stepOnce(0.1);
+  }
+  EXPECT_NEAR(vehicle->state().depthM, 20.0, 1e-6);
+
+  GlobalPoseReportType pose;
+  ASSERT_EQ(f.poseIo->readLatest(&pose), arlcore::io::ReadStatus::SUCCESS);
+  ASSERT_TRUE(pose.depth().has_value());
+  ASSERT_TRUE(pose.altitudeASF().has_value());
+  EXPECT_NEAR(pose.depth().value(), 20.0, 1e-6);
+  EXPECT_NEAR(pose.altitudeASF().value(), 30.0, 1e-6);  // floor 50 - depth 20
+
+  // Above-sea-floor setpoint converts against the configured floor: 10 m ASF = 40 m depth.
+  cv.elevationM = 10.0;
+  cv.elevationFrame = ElevationFrame::ALTITUDE_ASF;
+  vehicle->sendControlVector(cv);
+  for (int i = 0; i < 300; i++) {
+    vehicle->stepOnce(0.1);
+  }
+  EXPECT_NEAR(vehicle->state().depthM, 40.0, 1e-6);
+
+  // Depth commands clamp to the floor.
+  cv.elevationM = 500.0;
+  cv.elevationFrame = ElevationFrame::DEPTH;
+  vehicle->sendControlVector(cv);
+  for (int i = 0; i < 300; i++) {
+    vehicle->stepOnce(0.1);
+  }
+  EXPECT_NEAR(vehicle->state().depthM, 50.0, 1e-6);
+}
+
 TEST(SimVehicleControlTest, ThreadedRunPublishesAtCycleRate) {
   SimFixture f;
   f.sim.cycleRateHz = 50.0;

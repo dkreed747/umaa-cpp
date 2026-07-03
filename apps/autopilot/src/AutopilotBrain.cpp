@@ -22,6 +22,7 @@
 
 #include "AngleMath.h"
 #include "Logger.h"
+#include "PlannerParamsFactory.h"
 #include "ToleranceUtils.h"
 
 namespace arlcore::autopilot {
@@ -54,27 +55,7 @@ AutopilotBrain::AutopilotBrain(NavState* nav, IVehicleControl* vehicle, const Au
     arbiter_(config.arbitration.vectorPriority, config.arbitration.waypointPriority) {}
 
 PlannerParams AutopilotBrain::derivePlannerParams() const {
-  PlannerParams p;
-  p.leadDistanceM = config_.planner.leadDistanceM;
-  p.posCaptureM = config_.waypointTolerances.positionM;
-  p.yawCaptureRad = config_.waypointTolerances.yawRad;
-  p.elevCaptureM = config_.waypointTolerances.elevationM;
-  p.maxMissesPerWaypoint = config_.planner.maxMissesPerWaypoint;
-  p.elevationCountsAsMiss = config_.planner.elevationCountsAsMiss;
-  p.maxReplans = config_.planner.maxReplans;
-
-  // Turn radius = representative speed / max turn rate, from the surface capabilities,
-  // inflated by the configured margin: planning at exactly the vehicle's minimum radius
-  // leaves no turn authority to close tracking error during rate-saturated maneuvers.
-  const CapabilityLimits& surf = config_.platformCapabilities.surface;
-  const std::optional<double> speed = surf.cruisingSpeedMps.has_value() ? surf.cruisingSpeedMps
-                                                                        : surf.maxForwardSpeedMps;
-  p.turnRadiusM = config_.planner.defaultRadiusOfCurvatureM;
-  if (speed.has_value() && surf.maxTurnRateRps.has_value() && surf.maxTurnRateRps.value() > 0.0) {
-    p.turnRadiusM = std::max(1.0, config_.planner.turnRadiusMargin) * speed.value() /
-                    surf.maxTurnRateRps.value();
-  }
-  return p;
+  return arlcore::autopilot::derivePlannerParams(config_);
 }
 
 void AutopilotBrain::setVectorSetpoint(
@@ -215,7 +196,7 @@ void AutopilotBrain::updateVectorControl(const GlobalPoseReportType& pose) {
 }
 
 void AutopilotBrain::updateWaypointControl(const GlobalPoseReportType& pose) {
-  const ControlVector cv = planner_.update(pose);
+  const ControlVector cv = planner_.update(pose, nav_->groundSpeedMps());
   vehicle_->sendControlVector(cv);
 
   WaypointProgress prog = planner_.progress();

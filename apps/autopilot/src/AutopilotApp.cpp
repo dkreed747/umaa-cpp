@@ -71,6 +71,16 @@ bool AutopilotApp::initialize(const AutopilotConfig& config) {
     return false;
   }
 
+  // The platform capabilities drive the planner and tracker: a representative speed and the
+  // max turn rate are required to derive the turn radius.
+  const CapabilityLimits& surf = config_.platformCapabilities.surface;
+  const bool hasSpeed = surf.cruisingSpeedMps.has_value() || surf.maxForwardSpeedMps.has_value();
+  if (!hasSpeed || !surf.maxTurnRateRps.has_value() || surf.maxTurnRateRps.value() <= 0.0) {
+    UMAA_LOG_ERROR(util::SYSTEM_LOGGER, "platform_capabilities.surface must define "
+      "cruising/max forward speed and a positive max_turn_rate_rps (they drive the planner)")
+    return false;
+  }
+
   participant_ = arlcore::io::getDomainParticipant(config_.dds.domainId);
   subscriber_ = arlcore::io::createSubscriber(participant_);
   publisher_ = arlcore::io::createPublisher(participant_);

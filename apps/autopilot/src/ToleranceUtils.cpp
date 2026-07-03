@@ -140,6 +140,16 @@ std::optional<ElevationValue> extractElevation(
       }
       return out;
     }
+    case ElevationRequirementVariantTypeEnum::ALTITUDEASFREQUIREMENTVARIANT_D: {
+      const auto& req = sub.AltitudeASFRequirementVariantVariant().altitude();
+      out.valueM = req.altitude();
+      out.frame = ElevationFrame::ALTITUDE_ASF;
+      if (req.altitudeTolerance().has_value()) {
+        out.allowable = ValueRange{req.altitudeTolerance().value().lowerLimit(),
+                                   req.altitudeTolerance().value().upperlimit()};
+      }
+      return out;
+    }
     case ElevationRequirementVariantTypeEnum::ALTITUDEGEODETICREQUIREMENTVARIANT_D: {
       const auto& req = sub.AltitudeGeodeticRequirementVariantVariant().altitude();
       out.valueM = req.altitude();

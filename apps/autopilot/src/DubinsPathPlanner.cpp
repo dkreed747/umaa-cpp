@@ -20,6 +20,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "AngleMath.h"
@@ -54,6 +55,8 @@ std::optional<double> poseElevation(const GlobalPoseReportType& p, ElevationFram
       return p.altitude().has_value() ? std::optional<double>(p.altitude().value()) : std::nullopt;
     case ElevationFrame::ALTITUDE_AGL:
       return p.altitudeAGL().has_value() ? std::optional<double>(p.altitudeAGL().value()) : std::nullopt;
+    case ElevationFrame::ALTITUDE_ASF:
+      return p.altitudeASF().has_value() ? std::optional<double>(p.altitudeASF().value()) : std::nullopt;
     case ElevationFrame::ALTITUDE_GEODETIC:
       return p.altitudeGeodetic().has_value() ? std::optional<double>(p.altitudeGeodetic().value()) : std::nullopt;
     default:
@@ -61,12 +64,19 @@ std::optional<double> poseElevation(const GlobalPoseReportType& p, ElevationFram
   }
 }
 
-//! \brief Position capture tolerance for a waypoint (its own tolerance or the default).
-double positionToleranceM(const GlobalWaypointType& wp, const PlannerParams& params) {
+//! \brief Capture-gate half-width for a waypoint (its position tolerance or the default).
+double gateHalfWidthM(const GlobalWaypointType& wp, const PlannerParams& params) {
   if (wp.position().tolerance().has_value()) {
     return wp.position().tolerance().value().limit();
   }
   return params.posCaptureM;
+}
+
+//! \brief The waypoint's commanded speed (0 when the variant is unsupported; validation in
+//! the provider rejects such routes before they reach the planner).
+double waypointSpeedMps(const GlobalWaypointType& wp) {
+  const std::optional<SpeedValue> sp = tolerance::extractSpeed(wp.speed());
+  return sp.has_value() ? sp->speedMps : 0.0;
 }
 
 }  // namespace
@@ -135,12 +145,15 @@ void DubinsPathPlanner::plan(const std::vector<GlobalWaypointType>& waypoints,
   params_.sampleStepM = std::max(0.5, params_.sampleStepM);
   missCounts_.assign(waypoints_.size(), 0);
   targetIndex_ = 0;
-  withinCaptureZone_ = false;
   routeComplete_ = waypoints_.empty();
   failed_ = false;
   replanCount_ = 0;
   hasLastPos_ = false;
   legProgressS_ = 0.0;
+  lastGateAlongM_.reset();
+  elevApproachBudget_.reset();
+  elevApproachesUsed_ = 0;
+  lastSpiralElevErrM_.reset();
   currentLeg_.reset();
   progress_ = WaypointProgress{};
   progress_.valid = true;
@@ -159,23 +172,42 @@ void DubinsPathPlanner::plan(const std::vector<GlobalWaypointType>& waypoints,
     return;
   }
 
-  // The straight-line track origin for the first waypoint is the vehicle position at command
-  // time (per the UMAA GlobalWaypointType trackTolerance semantics).
-  segOriginXE_ = 0.0;
-  segOriginYN_ = 0.0;
   const Dubins2DPose startPose{0.0, 0.0, azToMath(poseYaw(start))};
+  planStartPose_ = startPose;
   currentLeg_ = buildLeg(startPose, 0);
   UMAA_LOG_INFO(util::SYSTEM_LOGGER, "DubinsPathPlanner planned route: " << waypoints_.size()
     << " waypoints, first leg " << currentLeg_->lengthM << " m (" << currentLeg_->path.word()
     << "), turn radius " << params_.turnRadiusM << " m")
 }
 
+std::vector<std::pair<double, double>> DubinsPathPlanner::previewRoute(double stepM) const {
+  std::vector<std::pair<double, double>> out;
+  if (waypoints_.empty()) {
+    return out;
+  }
+  const double step = std::max(0.5, stepM);
+  Dubins2DPose legStart = planStartPose_;
+  for (std::size_t i = 0; i < waypoints_.size(); i++) {
+    const Leg leg = buildLeg(legStart, i);
+    for (double s = 0.0; s <= leg.lengthM + step * 0.5; s += step) {
+      const Dubins2DPose p = sampleExtended(leg, std::min(s, leg.lengthM));
+      double lat = 0.0;
+      double lon = 0.0;
+      double h = 0.0;
+      localFrame_.Reverse(p.x, p.y, 0.0, lat, lon, h);
+      out.emplace_back(lat, lon);
+    }
+    legStart = Dubins2DPose{wpX_[i], wpY_[i], azToMath(leg.endAzimuthRad)};
+  }
+  return out;
+}
+
 CaptureResult DubinsPathPlanner::evaluateCapture(const GlobalPoseReportType& pose,
-                                                 double distToWaypointM) const {
+                                                 double gateLateralM) const {
   CaptureResult result;
   const GlobalWaypointType& wp = waypoints_[targetIndex_];
 
-  result.positionAchieved = distToWaypointM <= positionToleranceM(wp, params_);
+  result.positionAchieved = std::fabs(gateLateralM) <= gateHalfWidthM(wp, params_);
 
   if (wp.attitude().has_value()) {
     const AttitudeValue att = tolerance::extractYaw(wp.attitude().value());
@@ -200,19 +232,22 @@ CaptureResult DubinsPathPlanner::evaluateCapture(const GlobalPoseReportType& pos
 }
 
 void DubinsPathPlanner::advanceToNextWaypoint() {
-  segOriginXE_ = wpX_[targetIndex_];
-  segOriginYN_ = wpY_[targetIndex_];
   const double arrivalAz = currentLeg_->endAzimuthRad;
+  const double fromX = wpX_[targetIndex_];
+  const double fromY = wpY_[targetIndex_];
   targetIndex_++;
   legProgressS_ = 0.0;
-  withinCaptureZone_ = false;
+  lastGateAlongM_.reset();
+  elevApproachBudget_.reset();
+  elevApproachesUsed_ = 0;
+  lastSpiralElevErrM_.reset();
   if (targetIndex_ >= waypoints_.size()) {
     routeComplete_ = true;
     currentLeg_.reset();
     UMAA_LOG_INFO(util::SYSTEM_LOGGER, "DubinsPathPlanner route complete")
     return;
   }
-  const Dubins2DPose startPose{segOriginXE_, segOriginYN_, azToMath(arrivalAz)};
+  const Dubins2DPose startPose{fromX, fromY, azToMath(arrivalAz)};
   currentLeg_ = buildLeg(startPose, targetIndex_);
   UMAA_LOG_INFO(util::SYSTEM_LOGGER, "DubinsPathPlanner advancing to waypoint " << targetIndex_
     << ", leg " << currentLeg_->lengthM << " m (" << currentLeg_->path.word() << ")")
@@ -234,29 +269,107 @@ void DubinsPathPlanner::registerMiss(const Dubins2DPose& current) {
     return;
   }
   replanCount_++;
-  // Replan the current leg from the live pose: the new Dubins solution loops back around to
-  // the same arrival pose (a spiral when elevation is still being driven to target).
   currentLeg_ = buildLeg(current, targetIndex_);
   legProgressS_ = 0.0;
-  segOriginXE_ = current.x;
-  segOriginYN_ = current.y;
-  withinCaptureZone_ = false;
+  lastGateAlongM_.reset();
+  elevApproachBudget_.reset();
+  elevApproachesUsed_ = 0;
+  lastSpiralElevErrM_.reset();
   UMAA_LOG_INFO(util::SYSTEM_LOGGER, "DubinsPathPlanner replanned waypoint " << targetIndex_
     << " from live pose (replan " << replanCount_ << "/" << params_.maxReplans << "): leg "
     << currentLeg_->lengthM << " m (" << currentLeg_->path.word() << ")")
 }
 
-double DubinsPathPlanner::straightLineCrossTrackM(double xE, double yN) const {
-  const double tE = wpX_[targetIndex_] - segOriginXE_;
-  const double tN = wpY_[targetIndex_] - segOriginYN_;
-  const double len = std::hypot(tE, tN);
-  const double vE = xE - segOriginXE_;
-  const double vN = yN - segOriginYN_;
-  if (len < 1e-9) {
-    return std::hypot(vE, vN);
+void DubinsPathPlanner::spiralReplan(const Dubins2DPose& current) {
+  elevApproachesUsed_++;
+  currentLeg_ = buildLeg(current, targetIndex_);
+  legProgressS_ = 0.0;
+  lastGateAlongM_.reset();
+  UMAA_LOG_INFO(util::SYSTEM_LOGGER, "DubinsPathPlanner spiral pass " << elevApproachesUsed_
+    << "/" << elevApproachBudget_.value_or(0) << " for waypoint " << targetIndex_
+    << " (elevation still converging): loop leg " << currentLeg_->lengthM << " m ("
+    << currentLeg_->path.word() << ")")
+}
+
+std::optional<double> DubinsPathPlanner::elevationErrorM(const GlobalPoseReportType& pose) const {
+  const GlobalWaypointType& wp = waypoints_[targetIndex_];
+  if (!wp.elevation().has_value()) {
+    return std::nullopt;
   }
-  // Positive = right (starboard) of the track direction.
-  return (vE * tN - vN * tE) / len;
+  const std::optional<ElevationValue> el = tolerance::extractElevation(wp.elevation().value());
+  if (!el.has_value()) {
+    return std::nullopt;
+  }
+  const std::optional<double> cur = poseElevation(pose, el->frame);
+  if (!cur.has_value()) {
+    return std::nullopt;
+  }
+  return std::fabs(el->valueM - cur.value());
+}
+
+void DubinsPathPlanner::computeElevationApproachBudget(const GlobalPoseReportType& pose,
+                                                       double groundSpeedMps) {
+  elevApproachBudget_ = 0;
+  if (params_.maxDepthRateMps <= 0.0 || !currentLeg_.has_value()) {
+    return;
+  }
+  const std::optional<double> errM = elevationErrorM(pose);
+  if (!errM.has_value()) {
+    return;
+  }
+  // How long the commanded elevation change needs at the platform's depth-rate limit vs how
+  // long this pass of the 2D path provides: the shortfall, in whole passes, is the number of
+  // planned spiral loops before gate failures start counting against the miss budget.
+  const GlobalWaypointType& wp = waypoints_[targetIndex_];
+  const double speed = std::max({groundSpeedMps, waypointSpeedMps(wp), 0.5});
+  const double neededS = errM.value() / params_.maxDepthRateMps;
+  const double passS = currentLeg_->lengthM / speed;
+  if (neededS > passS && passS > 1e-6) {
+    elevApproachBudget_ = std::min(100, static_cast<int>(std::ceil(neededS / passS)));
+    UMAA_LOG_INFO(util::SYSTEM_LOGGER, "DubinsPathPlanner waypoint " << targetIndex_
+      << " elevation change of " << errM.value() << " m needs ~"
+      << neededS << " s at the platform depth rate (pass is ~" << passS
+      << " s): budgeting " << elevApproachBudget_.value() << " spiral approaches")
+  }
+}
+
+bool DubinsPathPlanner::allowSpiralPass(const GlobalPoseReportType& pose, double groundSpeedMps) {
+  if (!elevApproachBudget_.has_value() || elevApproachBudget_.value() <= 0 ||
+      params_.maxDepthRateMps <= 0.0 || !currentLeg_.has_value()) {
+    return false;
+  }
+  const std::optional<double> errM = elevationErrorM(pose);
+  if (!errM.has_value()) {
+    return false;
+  }
+  const GlobalWaypointType& wp = waypoints_[targetIndex_];
+  const double speed = std::max({groundSpeedMps, waypointSpeedMps(wp), 0.5});
+  const double passS = currentLeg_->lengthM / speed;  // just-flown leg ~ the next loop
+  const double expectedPerPassM = params_.maxDepthRateMps * passS;
+
+  if (elevApproachesUsed_ < elevApproachBudget_.value()) {
+    lastSpiralElevErrM_ = errM;
+    return true;
+  }
+  // The up-front budget is estimated from the first pass of the leg, which is usually longer
+  // than the loop-back passes, so it can undercount. Extend it from the remaining error and
+  // the actual loop time — but only while the elevation is genuinely converging (at least half
+  // the expected per-pass change since the previous pass); a vehicle that cannot make depth
+  // must start consuming the miss budget.
+  if (lastSpiralElevErrM_.has_value() && expectedPerPassM > 1e-6 &&
+      lastSpiralElevErrM_.value() - errM.value() >= 0.5 * expectedPerPassM) {
+    const int remaining = std::max(1, static_cast<int>(std::ceil(errM.value() / expectedPerPassM)));
+    const int extended = std::min(100, elevApproachesUsed_ + remaining);
+    if (extended > elevApproachBudget_.value()) {
+      UMAA_LOG_INFO(util::SYSTEM_LOGGER, "DubinsPathPlanner waypoint " << targetIndex_
+        << " elevation still converging with " << errM.value() << " m to go (~"
+        << expectedPerPassM << " m per loop): extending spiral budget to " << extended)
+      elevApproachBudget_ = extended;
+    }
+    lastSpiralElevErrM_ = errM;
+    return elevApproachesUsed_ < elevApproachBudget_.value();
+  }
+  return false;
 }
 
 void DubinsPathPlanner::updateDistanceMetrics(double xE, double yN, double distToWaypointM) {
@@ -271,7 +384,7 @@ void DubinsPathPlanner::updateDistanceMetrics(double xE, double yN, double distT
   }
 }
 
-ControlVector DubinsPathPlanner::update(const GlobalPoseReportType& pose) {
+ControlVector DubinsPathPlanner::update(const GlobalPoseReportType& pose, double groundSpeedMps) {
   progress_.valid = true;
   if (waypoints_.empty() || routeComplete_ || failed_) {
     progress_.routeComplete = routeComplete_;
@@ -293,25 +406,29 @@ ControlVector DubinsPathPlanner::update(const GlobalPoseReportType& pose) {
   if (!currentLeg_.has_value()) {
     currentLeg_ = buildLeg(current, targetIndex_);
     legProgressS_ = 0.0;
+    lastGateAlongM_.reset();
+    elevApproachBudget_.reset();
   }
   const Leg& leg = currentLeg_.value();
+  if (!elevApproachBudget_.has_value()) {
+    computeElevationApproachBudget(pose, groundSpeedMps);
+  }
 
-  // Pure-pursuit lead distance: capped relative to the turn radius, because a lead much
-  // longer than the turning circle cuts the corners of the final arc so hard the capture
-  // zone is missed entirely.
-  const double lead = std::clamp(std::min(params_.leadDistanceM, 1.5 * params_.turnRadiusM),
-                                 2.0 * params_.sampleStepM, params_.leadDistanceM);
-  const double overshootBudget = std::max(lead, 2.0 * positionToleranceM(wp, params_));
+  const double step = params_.sampleStepM;
+  const double searchLead = std::max(params_.leadDistanceM, 4.0 * step);
+  const double gateHalfM = gateHalfWidthM(wp, params_);
+  const double overshootBudget = std::max(searchLead, 4.0 * gateHalfM);
 
   // Advance the monotonic arc-length progress pointer: search a bounded window ahead of the
   // previous progress (with a small allowance backward) for the closest path sample. The
-  // parametrization extends beyond the path end along the arrival heading so both the
-  // progress pointer and the carrot keep moving through the waypoint (a pinned carrot at the
-  // endpoint would make the vehicle orbit it forever).
+  // parametrization extends past the path end so progress keeps flowing through the gate.
+  double pathXteM = 0.0;  // signed cross-track error from the planned path (+ = starboard)
   {
-    const double step = params_.sampleStepM;
     const double back = std::min(legProgressS_, 2.0 * step);
-    const double windowAheadM = std::max(4.0 * step, 3.0 * lead);
+    // The forward window must stay small relative to the leg: a tight loop leg (a spiral
+    // pass confined to a couple of turn radii) brings far-ahead samples spatially close to
+    // the vehicle, and a wide window would let the progress pointer leap across the loop.
+    const double windowAheadM = std::max(6.0 * step, 3.0 * std::max(groundSpeedMps, 1.0));
     const double sMax = leg.lengthM + overshootBudget + step;
     double bestS = legProgressS_;
     double bestD = std::numeric_limits<double>::max();
@@ -325,24 +442,27 @@ ControlVector DubinsPathPlanner::update(const GlobalPoseReportType& pose) {
       }
     }
     legProgressS_ = bestS;
+    const Dubins2DPose closest = sampleExtended(leg, bestS);
+    const double tx = std::cos(closest.theta);
+    const double ty = std::sin(closest.theta);
+    // Starboard-positive lateral offset from the path tangent.
+    pathXteM = ty * (xE - closest.x) - tx * (yN - closest.y);
   }
 
-  // Carrot at the lead distance along the (extended) path. The lead tightens on final
-  // approach so arc-cutting error at arrival stays inside the capture radius; the floor
-  // (a fraction of the turn radius) keeps the pursuit stable for a rate-limited vehicle.
-  const double remainingM = std::max(0.0, leg.lengthM - legProgressS_);
-  const double carrotLead = std::max(std::min(lead, 0.7 * remainingM + params_.sampleStepM),
-                                     std::max(0.8 * params_.turnRadiusM, 2.0 * params_.sampleStepM));
-  const Dubins2DPose carrot = sampleExtended(leg, legProgressS_ + carrotLead);
-  const double carrotX = carrot.x;
-  const double carrotY = carrot.y;
+  // Path-frame tracking law: command the planned-path tangent (sampled ~1 s ahead of the
+  // closest point as phase lead for the rate-limited heading loop) plus a cross-track
+  // correction atan(xte / turnRadius) that converges back onto the path within roughly one
+  // turn radius without saturating the vehicle's turn authority.
+  const double vMps = std::max(groundSpeedMps, 0.5);
+  const double tangentS = legProgressS_ + std::max(2.0 * step, 1.0 * vMps);
+  const Dubins2DPose tangentPoint = sampleExtended(leg, tangentS);
+  const double pathAz = mathToAz(tangentPoint.theta);
+  const double correction =
+      std::clamp(std::atan2(pathXteM, std::max(params_.turnRadiusM, 1.0)), -1.2, 1.2);
 
   ControlVector cv;
-  const double dxE = carrotX - xE;
-  const double dyN = carrotY - yN;
-  cv.headingRad = (std::hypot(dxE, dyN) > 1e-9) ? std::atan2(dxE, dyN) : poseYaw(pose);
-  const std::optional<SpeedValue> sp = tolerance::extractSpeed(wp.speed());
-  cv.speedMps = sp.has_value() ? sp->speedMps : 0.0;
+  cv.headingRad = wrapPi(pathAz - correction);
+  cv.speedMps = waypointSpeedMps(wp);
   if (wp.elevation().has_value()) {
     const std::optional<ElevationValue> el = tolerance::extractElevation(wp.elevation().value());
     if (el.has_value()) {
@@ -352,21 +472,31 @@ ControlVector DubinsPathPlanner::update(const GlobalPoseReportType& pose) {
   }
   lastVector_ = cv;
 
+  // Capture gate: a segment of half-width gateHalfM through the waypoint, perpendicular to
+  // the arrival heading. Signed along-track distance to the gate plane and lateral offset
+  // along the gate.
+  const double dirE = std::sin(leg.endAzimuthRad);
+  const double dirN = std::cos(leg.endAzimuthRad);
+  const double relE = xE - wpX_[targetIndex_];
+  const double relN = yN - wpY_[targetIndex_];
+  const double gateAlongM = relE * dirE + relN * dirN;
+  const double gateLateralM = relE * dirN - relN * dirE;  // starboard-positive
+
   // Progress reporting.
-  const CaptureResult cap = evaluateCapture(pose, dist);
+  const CaptureResult cap = evaluateCapture(pose, gateLateralM);
   progress_.distanceToWaypointM = dist;
-  progress_.positionAchieved = cap.positionAchieved;
+  progress_.positionAchieved = dist <= gateHalfM;
   progress_.attitudeAchieved = cap.attitudeAchieved;
   progress_.elevationAchieved = cap.elevationAchieved;
   progress_.waypointId = arlcore::NumericGuid(wp.waypointID());
   progress_.waypointsRemaining = static_cast<int32_t>(waypoints_.size() - targetIndex_);
+  // Track holding is judged against the planned Dubins path itself (not the straight lines
+  // between waypoints): report the signed offset and evaluate the UMAA track tolerance on it.
+  progress_.crossTrackErrorM = pathXteM;
   if (wp.trackTolerance().has_value()) {
-    const double xte = straightLineCrossTrackM(xE, yN);
-    progress_.crossTrackErrorM = xte;
     const std::optional<double> tol = tolerance::extractTrackToleranceM(wp.trackTolerance().value());
-    progress_.trackLineAchieved = !tol.has_value() || std::fabs(xte) <= tol.value();
+    progress_.trackLineAchieved = !tol.has_value() || std::fabs(pathXteM) <= tol.value();
   } else {
-    progress_.crossTrackErrorM.reset();
     progress_.trackLineAchieved = true;
   }
   updateDistanceMetrics(xE, yN, dist);
@@ -374,11 +504,14 @@ ControlVector DubinsPathPlanner::update(const GlobalPoseReportType& pose) {
   lastYN_ = yN;
   hasLastPos_ = true;
 
-  // Capture / miss state machine: capture is evaluated continuously while inside the capture
-  // zone; leaving the zone (or overflying the planned path) without a clean capture is a miss.
-  const bool inZone = dist <= positionToleranceM(wp, params_);
-  if (inZone) {
-    withinCaptureZone_ = true;
+  // Gate-crossing detection, evaluated only on final approach (the planned path of a dense
+  // route may legitimately cross the gate plane mid-turn far from the waypoint).
+  const bool onFinalApproach = legProgressS_ > leg.lengthM - (searchLead + 2.0 * gateHalfM);
+  const bool crossedGate = onFinalApproach && lastGateAlongM_.has_value() &&
+                           lastGateAlongM_.value() < 0.0 && gateAlongM >= 0.0;
+  bool legStateChanged = false;
+  if (crossedGate) {
+    legStateChanged = true;
     if (cap.captured) {
       advanceToNextWaypoint();
       if (routeComplete_) {
@@ -387,20 +520,25 @@ ControlVector DubinsPathPlanner::update(const GlobalPoseReportType& pose) {
         progress_.routeComplete = true;
         progress_.waypointsRemaining = 0;
       }
-    }
-  } else if (withinCaptureZone_) {
-    withinCaptureZone_ = false;
-    // Falling edge: exited the capture zone without capturing. Only count it as a miss when
-    // it happened on final approach — in dense waypoint fields (e.g. lawnmower lanes spaced
-    // tighter than the turning circle) the planned path legitimately crosses the target's
-    // capture zone mid-turn, and the path itself will bring the vehicle back for arrival.
-    if (legProgressS_ > leg.lengthM - (lead + 2.0 * positionToleranceM(wp, params_))) {
-      registerMiss(current);
+    } else {
+      const bool attitudeOk = !cap.attitudeAchieved.has_value() || cap.attitudeAchieved.value();
+      const bool elevationOnlyFailure = cap.positionAchieved && attitudeOk &&
+                                        !cap.elevationAchieved && params_.elevationCountsAsMiss;
+      if (elevationOnlyFailure && allowSpiralPass(pose, groundSpeedMps)) {
+        // The commanded elevation change was known to need more passes than one: loop back
+        // around without spending the miss budget — the spiral is the plan.
+        spiralReplan(current);
+      } else {
+        registerMiss(current);
+      }
     }
   } else if (legProgressS_ > leg.lengthM + overshootBudget - 1e-9) {
-    // Overflew the end of the planned path without ever entering the capture zone (the
-    // capture radius is smaller than our tracking error): loop back around.
+    // Overflew the end of the planned path without a usable gate crossing: loop back around.
     registerMiss(current);
+    legStateChanged = true;
+  }
+  if (!legStateChanged) {
+    lastGateAlongM_ = onFinalApproach ? std::optional<double>(gateAlongM) : std::nullopt;
   }
   progress_.failed = failed_;
   progress_.routeComplete = routeComplete_;

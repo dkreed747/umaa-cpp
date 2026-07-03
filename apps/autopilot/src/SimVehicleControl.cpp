@@ -163,14 +163,24 @@ void SimVehicleControl::stepOnce(double dtS) {
     const double maxDv = std::max(0.0, simConfig_.accelMps2) * dtS;
     speedMps_ += std::clamp(speedErr, -maxDv, maxDv);
 
-    // Drive depth toward a commanded DEPTH setpoint when the platform supports it. Other
-    // elevation frames are not modeled by the sim and leave depth unchanged.
-    if (caps_.underwaterEnabled && setpoint_.has_value() && setpoint_->elevationM.has_value() &&
-        setpoint_->elevationFrame == ElevationFrame::DEPTH) {
-      const double depthErr = setpoint_->elevationM.value() - depthM_;
-      const double maxDd = maxDepthRateMps() * dtS;
-      depthM_ += std::clamp(depthErr, -maxDd, maxDd);
-      depthM_ = std::max(0.0, depthM_);
+    // Drive depth toward a commanded DEPTH or ALTITUDE_ASF (above sea floor) setpoint when
+    // the platform supports it; both are converted to a target depth against the configured
+    // floor depth. Other elevation frames are not modeled by the sim.
+    if (caps_.underwaterEnabled && setpoint_.has_value() && setpoint_->elevationM.has_value()) {
+      std::optional<double> targetDepth;
+      if (setpoint_->elevationFrame == ElevationFrame::DEPTH) {
+        targetDepth = setpoint_->elevationM.value();
+      } else if (setpoint_->elevationFrame == ElevationFrame::ALTITUDE_ASF ||
+                 setpoint_->elevationFrame == ElevationFrame::ALTITUDE_AGL) {
+        targetDepth = simConfig_.floorDepthM - setpoint_->elevationM.value();
+      }
+      if (targetDepth.has_value()) {
+        const double clamped = std::clamp(targetDepth.value(), 0.0, simConfig_.floorDepthM);
+        const double depthErr = clamped - depthM_;
+        const double maxDd = maxDepthRateMps() * dtS;
+        depthM_ += std::clamp(depthErr, -maxDd, maxDd);
+        depthM_ = std::clamp(depthM_, 0.0, simConfig_.floorDepthM);
+      }
     }
 
     // Advance the position in the local tangent plane.
@@ -204,6 +214,8 @@ void SimVehicleControl::publishReports() {
   pose.course() = heading;
   if (caps_.underwaterEnabled) {
     pose.depth() = depth;
+    // Height above the sea floor, from the configured floor depth (0 at the floor).
+    pose.altitudeASF() = std::max(0.0, simConfig_.floorDepthM - depth);
   }
   poseProvider_.send(&pose);
 

@@ -62,14 +62,13 @@ struct VectorToleranceConfig {
 
 //! \brief Default capture tolerances applied to a waypoint when it omits them.
 struct WaypointToleranceConfig {
-  double positionM = 10.0;
+  double positionM = 2.5;
   double yawRad = 0.1745;
   double elevationM = 1.0;
 };
 
 struct PlannerConfig {
   double leadDistanceM = 50.0;
-  double defaultRadiusOfCurvatureM = 25.0;
   double turnRadiusMargin = 1.25;  // planned radius = margin * (speed / max turn rate)
   int maxListWaitCycles = 200;
   int maxMissesPerWaypoint = 3;
@@ -120,7 +119,8 @@ struct SimVehicleConfig {
   double initialLatitudeDeg = 39.0;
   double initialLongitudeDeg = -76.5;
   double initialHeadingRad = 0.0;
-  double accelMps2 = 1.0;  // surge acceleration/deceleration limit
+  double accelMps2 = 1.0;    // surge acceleration/deceleration limit
+  double floorDepthM = 60.0;  // sea-floor depth below the surface (for depth/ASF simulation)
 };
 
 //! \brief Top-level configuration produced by YamlConfigLoader and consumed by
