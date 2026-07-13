@@ -105,7 +105,7 @@ class CycloneReader : public ReaderBase<DataType> {
       if (instanceAlive || validData) {
         sampleData = sample.data();
       } else {
-        reader_.key_value(sampleData, sample.info().instance_handle());
+        recoverKey(&sampleData, sample.info().instance_handle());
       }
 
       // Apply the manual filter only to valid data. Key-only samples (e.g. dispose
@@ -189,7 +189,7 @@ class CycloneReader : public ReaderBase<DataType> {
     if (instanceState == dds::sub::status::InstanceState::alive()) {
       sampleData = latestSample.data();
     } else {
-      reader_.key_value(sampleData, latestSample.info().instance_handle());
+      recoverKey(&sampleData, latestSample.info().instance_handle());
     }
 
     if (instanceState == dds::sub::status::InstanceState::alive()) {
@@ -276,7 +276,7 @@ class CycloneReader : public ReaderBase<DataType> {
         sampleData = sample.data();
       } else {
         // Only sets the keyed fields in sampleData
-        reader_.key_value(sampleData, sample.info().instance_handle());
+        recoverKey(&sampleData, sample.info().instance_handle());
       }
 
       // See read(): the manual filter only applies to valid data.
@@ -321,6 +321,18 @@ class CycloneReader : public ReaderBase<DataType> {
   }
 
  private:
+  //! \brief Recover the keyed fields of a dispose/unregister notification into outSample.
+  //!        Keyless topics have no key to recover -- CycloneDDS rejects the lookup -- so the
+  //!        sample is left default-constructed instead of letting the exception escape the
+  //!        read path (which would abort the caller's polling thread).
+  void recoverKey(DataType* outSample, const dds::core::InstanceHandle& handle) {
+    try {
+      reader_.key_value(*outSample, handle);
+    } catch (const std::exception& e) {
+      UMAA_LOG_WARN(util::SYSTEM_LOGGER, "Could not recover key from dispose notification: " << e.what())
+    }
+  }
+
   dds::sub::DataReader<DataType> reader_ = dds::core::null;
   std::mutex readerLock_;
   int32_t invalidSampleCount_ = 0;

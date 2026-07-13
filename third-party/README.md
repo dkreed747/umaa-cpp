@@ -1,6 +1,7 @@
-# UMAA SDK Common Third Party Packages
+# umaa-cpp Third Party Packages
 
 ## Hello World
-This directory contains a sample idl that will be generated into Cyclone CXX types at compile time.
 
-The generated types are used to test the Cyclone readers and senders.
+This directory contains a sample IDL that is generated into Cyclone CXX types
+at build time (see `helloworld/CMakeLists.txt`). The generated types are used
+by the `umaa-cpp-dds-test` Cyclone reader/sender integration tests.

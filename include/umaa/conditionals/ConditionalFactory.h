@@ -83,7 +83,12 @@ class ConditionalFactory {
   template <class Derived, class Specialization>
   std::optional<std::shared_ptr<Derived>> createConditional(const ConditionalType& base,
                                                             const Specialization& specialized,
-                                                            const std::string& topic);
+                                                            const std::string& topic) {
+    if (ConditionalBase::isValidSpecialization<Specialization>(base, specialized, topic)) {
+      return std::make_shared<Derived>(base, specialized);
+    }
+    return std::nullopt;
+  }
 
   //! \brief Create a ConstraintViolatedConditional from a base UMAA conditional
   //! \param base The UMAA conditional object

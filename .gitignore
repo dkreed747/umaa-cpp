@@ -1,4 +1,10 @@
 build/
+build-*/
+install/
+dist/
+.cache/
+gcov-reports/
+testResults.txt
 .vscode/tasks.json
 .idea/
 cmake-build-debug/

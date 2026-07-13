@@ -99,7 +99,14 @@ class CycloneBufferedReader : public BufferedReaderBase<DataType> {
 
       if (sample.info().state().instance_state() == dds::sub::status::InstanceState::not_alive_disposed()) {
         DataType disposedSample;
-        reader_.key_value(disposedSample, info.instance_handle());
+        try {
+          // Only sets the keyed fields; keyless topics have no key to recover,
+          // so the sample is left default-constructed rather than letting the
+          // exception escape the polling thread.
+          reader_.key_value(disposedSample, info.instance_handle());
+        } catch (const std::exception& e) {
+          UMAA_LOG_WARN(util::SYSTEM_LOGGER, "Could not recover key from dispose notification: " << e.what())
+        }
         sampleEnvelope.data = disposedSample;
         sampleEnvelope.status = ReadStatus::DISPOSED;
       } else {

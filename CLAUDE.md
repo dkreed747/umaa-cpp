@@ -4,50 +4,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-This is **`umaa-cpp`**, a modern C++ library (currently C++23, moving to C++20 — see "Project
-state" below) providing reusable abstractions for building UMAA
-(Unmanned Maritime Autonomy Architecture) services that communicate over DDS. It produces
-shared/static libraries consumed by downstream service projects as a git submodule or linked
-dependency.
+This is **`umaa-cpp`**, a modern C++20 library providing reusable abstractions for building UMAA
+(Unmanned Maritime Autonomy Architecture) services that communicate over DDS. It builds one
+library, **`umaa-cpp`** (linked as `umaa-cpp::umaa-cpp`), covering config, domain types, DDS/UDP
+IO, observer pub/sub, health/log services, and all UMAA implementations (state machines,
+conditionals, objective executors, services). Downstream projects consume it either as a git
+submodule (`add_subdirectory`) or as an installed package (`find_package(umaa-cpp)`) — the target
+name is identical in both modes.
 
-The current libraries (names predate the rename — see "Project state" below):
-
-- **`umaa-sdk-common`** — the full common library (config, domain types, DDS/UDP IO, observer,
-  health/log services, plus all UMAA implementations).
-- **`umaa++`** — a narrower library of just the UMAA C++ implementations (state machines,
-  objective executors, services).
+The UMAA DDS types and CycloneDDS come from the **umaa-cyclone-cpp** development container
+(`find_package(umaa_cyclone_cpp)` resolves against `/opt/umaa`); the SDK does not generate types
+itself. Other dependencies (yaml-cpp, GeographicLib, log4cxx, libuuid, GoogleTest) are also
+provided by that image.
 
 ## Project state & direction
 
-> **Read this before making structural changes.** This repo is mid-transition. Much of what
-> the rest of this file describes is the *current* (legacy) state; the items below are the
-> *intended* direction. When a task touches these areas, move toward the target architecture
-> rather than entrenching the old one — but ask if a change would be large or ambiguous.
+The `umaa-sdk-common` → `umaa-cpp` transition is **done**: renamed project/targets, UBI 10 +
+gcc-toolset-15 + C++20 toolchain, `.devcontainer/`, CMake presets, install/export package config,
+and a GitLab CI pipeline publishing an SDK image and a package tarball. The former `umaa-sdk-common`
+and `umaa++` targets were consolidated into the single `umaa-cpp` library (`umaa++` was a strict
+subset compiled twice).
 
-This project was previously `umaa-sdk-common` and is being reframed and renamed to **`umaa-cpp`**,
-a broader vision than a "common" grab-bag library.
+Planned future work:
 
-**First branch/MR (foundation — minimal code changes):** vendor the UMAA IDLs + generate types,
-add the devcontainer, and perform the rename. This MR lays the development foundation rather than
-changing behavior. Decided toolchain/runtime targets for this work:
-
-- **Base/runtime image: UBI 10** (Red Hat Universal Base Image) — replaces the external
-  `umaa-cyclone-cxx-types` dev image.
-- **Compiler: GCC 15 toolset.**
-- **Language standard: C++20** (stepping *down* from the current C++23) for a stable-but-modern
-  production library. Note `CMakeLists.txt` still sets `CMAKE_CXX_STANDARD 23` — moving it to 20 is
-  part of this work; avoid introducing C++23-only features in new code.
-
-Known in-flight and planned work:
-
-- **Rename**: `umaa-sdk-common` → `umaa-cpp`. Identifiers, target names (`umaa-sdk-common`,
-  `umaa++`), image names, and docs still use the old name; treat the rename as ongoing, not done.
-- **Vendor the UMAA IDLs into this repo** under `idl/UMAA/...`, removing the hard dependency on
-  the external `umaa-cyclone-cxx-types` base image for the generated types. The build will
-  generate the CXX types from these IDLs instead of consuming them from `/usr/local/umaa-6.0`.
-- **`.devcontainer/devcontainer.json`**: add a cross-platform dev container so contributors on
-  any OS can spin up a fully-provisioned environment (DDS, codegen, toolchain) with one command.
-  This replaces the current "must run inside a specific Linux image" friction.
+- **Pathed includes**: headers are currently included flat (`#include "AppConfig.h"`), so every
+  `include/` subdirectory is exported on the target interface. Migrating consumers to
+  `#include <umaa-cpp/config/AppConfig.h>` style is a planned whole-tree cleanup.
 - **Middleware abstraction across DDS vendors**: extend the IO layer to switch intelligently
   between **RTI Connext DDS** and **Cyclone DDS**. Intended CMake behavior: detect an RTI Connext
   installation first and build against it; otherwise fall back to Cyclone. The existing
@@ -61,55 +43,44 @@ Known in-flight and planned work:
 - **Plugin architecture**: enable users to add new UMAA services, behaviors, and autonomies as
   plugins for faster extensibility.
 
-### Current build dependency (legacy, being removed)
-
-Today this repo builds **only on Linux** inside a prebuilt dev Docker image and depends on
-system-installed CycloneDDS-CXX, Log4CXX, GeographicLib, and the **generated UMAA Cyclone CXX IDL
-types** (`umaa-cyclone-cxx-types`, headers under `/usr/local/umaa-6.0`) supplied by that base image.
-A native Windows/macOS build does not currently work. The devcontainer + vendored-IDL + multi-vendor
-work above is specifically aimed at removing these constraints, so prefer solutions that move in
-that direction over ones that deepen the reliance on the external image or on Cyclone-only paths.
-
 ## Build & test
 
-The build is driven by CMake with three feature options (all default OFF):
-
-- `TEST_COMMON` — builds the `umaa_sdk_common_test` and `umaa_cxx_test` executables.
-- `TEST_CYCLONE` — builds `umaa_sdk_cyclone_test` (needs a live Cyclone DDS environment).
-- `CODE_COVERAGE` — adds `-fprofile-arcs -ftest-coverage` and links `gcov`.
-
-Standard build + test (run inside the dev container):
+Build inside the umaa-cyclone-cpp dev container (`.devcontainer/`, or under
+`/workspace/projects` in the shared container). CMake presets drive everything:
 
 ```bash
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Debug -DTEST_COMMON=1 -DTEST_CYCLONE=1
-make -j"$(nproc)"
-ctest --verbose
+cmake --preset dev-debug      # Debug, all tests on
+cmake --build --preset dev-debug
+ctest --preset dev-debug
 ```
 
-Build the dev/CI Docker image locally:
+Presets: `dev-debug` (Debug + tests, `build/`), `dev-release` (Release, `build-release/`),
+`ci` (Release + tests, `build/`, installs to `install/`).
 
-```bash
-docker build . -t umaa-sdk-common -f ./ci/umaa-sdk-common.Dockerfile
-```
+Options (all prefixed, defaults in parens): `UMAA_CPP_BUILD_TESTS` (OFF), `UMAA_CPP_BUILD_DDS_TESTS`
+(OFF), `UMAA_CPP_COVERAGE` (OFF), `UMAA_CPP_INSTALL` (ON), `BUILD_SHARED_LIBS` (ON).
+
+The SDK image is built by CI from `Dockerfile` (dev image + `/opt/umaa-cpp`); the package tarball
+is `tar -C /opt/umaa-cpp .` of the image contents.
 
 ### Running tests
 
-Tests use GoogleTest (fetched at configure time via `cmake/CMakeLists.txt.gtest.in`). There are
-three test executables registered with CTest:
+Tests use GoogleTest from the dev image (`find_package(GTest)` — no network fetch). Three test
+executables registered with CTest:
 
-- `umaa_sdk_common_test` — non-UMAA common code (domain, observer, common, io/udp, io/dds base).
-- `umaa_cxx_test` — UMAA implementations (state machines, conditionals, services, objective executors).
-- `umaa_sdk_cyclone_test` — Cyclone DDS integration tests (only with `-DTEST_CYCLONE=1`).
+- `umaa-cpp-core-test` — non-UMAA common code (domain, observer, common, io/udp, io/dds base).
+- `umaa-cpp-umaa-test` — UMAA implementations (state machines, conditionals, services, objective executors).
+- `umaa-cpp-dds-test` — Cyclone DDS integration tests (only with `UMAA_CPP_BUILD_DDS_TESTS=ON`);
+  runs over loopback via `config/cyclonedds-loopback.xml`, wired through the test's
+  `CYCLONEDDS_URI` environment property.
 
 ```bash
 # Run one test executable directly with a gtest filter
-cd build
-./test/umaa_cxx_test --gtest_filter='ConditionalFactory*'
+./build/test/umaa-cpp-umaa-test --gtest_filter='ConditionalFactory*'
 
 # Run all CTest tests, or just one by name
-ctest --verbose
-ctest -R umaa_cxx_test --verbose
+ctest --preset dev-debug
+ctest --preset dev-debug -R umaa-cpp-umaa-test
 
 # Stress / flake detection: run the full ctest suite 20x into testResults.txt
 ../scripts/runTestXTimes.sh
@@ -118,11 +89,14 @@ ctest -R umaa_cxx_test --verbose
 Adding a new test file requires editing `test/CMakeLists.txt` — source files are listed
 explicitly in the relevant `add_executable(...)` block (there is no globbing).
 
+`ci/smoke/` is a minimal standalone consumer (`find_package(umaa-cpp)` + loopback DDS round-trip)
+used by the CI package/integration jobs; keep it building when changing the public surface.
+
 ### Coverage
 
 ```bash
-cmake .. -DTEST_COMMON=1 -DTEST_CYCLONE=1 -DCODE_COVERAGE=1
-make -j"$(nproc)" && ctest
+cmake --preset dev-debug -DUMAA_CPP_COVERAGE=ON
+cmake --build --preset dev-debug && ctest --preset dev-debug
 ../scripts/run_gcov.sh build   # emits *.gcov into gcov-reports/
 ```
 
@@ -131,7 +105,7 @@ make -j"$(nproc)" && ctest
 - **Formatting**: `.clang-format` (Google-based). **Line length is 120**, not 80.
 - **clang-tidy**: `.clang-tidy` enables a curated bugprone/cert/cppcoreguidelines/modernize/
   performance/readability set (all-off baseline, opt-in checks). Honor `// NOLINT` markers.
-- **cpplint**: configured via `CPPLINT.cfg` (`linelength=120`, `-build/c++11` filtered out). CI runs:
+- **cpplint**: configured via `CPPLINT.cfg` (`linelength=120`, `-build/c++11` filtered out):
   `cpplint --filter=-builder/c++11 --linelength=120 --recursive include src`.
 
 ## Architecture
@@ -188,14 +162,23 @@ and `include/umaa/services/base/README.md` are the most important):
 - **Domain types (`include/domain`)** — value/covariance/pose/velocity wrappers around UMAA data.
 
 - **Config (`include/config`, `config/`)** — `ConfigurationManager` / `AppConfig` load
-  `config/system-config.yml` (DDS, network, vehicle config) via the vendored `third-party/yaml-cpp`.
+  `config/system-config.yml` (DDS, network, vehicle config) via the dev image's yaml-cpp.
   Runtime also uses `config/CYCLONE_QOS_PROFILES.xml` and `config/log4cxx.xml`, which CMake copies
-  into the build dir. `include/env/Env.h` provides templated `getEnv<T>()` helpers.
+  into the build dir (and installs to `share/umaa-cpp/config/`). `include/env/Env.h` provides
+  templated `getEnv<T>()` helpers.
+
+- **Test utilities (`test-utils/`)** — `umaa-cpp::test-utils` (INTERFACE): `LocalReaderSender`
+  in-memory loopback IO plus gmock mocks. Build-tree only, deliberately not installed; downstream
+  projects that build the SDK as a submodule may link it for their own tests.
 
 ## Key conventions
 
-- C++23 today, targeting **C++20** (see "Project state"); don't add C++23-only features in new code.
-  `-fPIC -fpermissive`. Header guards are full-path uppercased (e.g. `INCLUDE_ENV_ENV_H_`).
+- **C++20** (`target_compile_features(... cxx_std_20)`, exported to consumers); no `-fpermissive`.
+  Header guards are full-path uppercased (e.g. `INCLUDE_ENV_ENV_H_`).
+- Template members meant to be used by consumers/tests must be defined (or their explicit
+  specializations declared) in headers — symbols emitted only as implicit instantiations inside a
+  `.cpp` vanish at `-O3` (this bit `ConditionalFactory::createConditional` and
+  `ConditionalReportProvider::getTopicAndWriter` during the port).
 - Cyclone DDS union/discriminator manipulation is non-obvious — see `include/io/dds/cyclone/README.md`
   for the discriminator/union-subtype instantiation idiom.
 - Geographic math formulas (projection, lat/long shift, heading, haversine) are documented in
@@ -204,7 +187,18 @@ and `include/umaa/services/base/README.md` are the most important):
 
 ## CI
 
-GitLab CI (`.gitlab-ci.yml`) runs against a shared RAIL template and the `umaa-cyclone-cxx-types`
-dev image: stages are secret-detection → lint (cpplint) → build → test (ctest, JUnit reports) →
-static-analysis (SonarQube + gcov) → containerize → publish. A push to the default branch triggers
-`UpdateParentProjects.py`, which bumps this submodule in downstream parent projects.
+GitLab CI (`.gitlab-ci.yml`): `test → image → package → integration → publish`.
+
+- `build-test` runs the full ctest suite (JUnit to MR widgets) in the umaa-cyclone-cpp dev image;
+  it gates everything downstream.
+- `build-image` (Kaniko) builds `Dockerfile` → SDK image (`:short-sha` + `:ref-slug` always;
+  `:latest` on the default branch; `:tag` + `:latest` on tags). `BASE_IMAGE_TAG` (default
+  `latest`) selects the dev-image tag — override it per-pipeline while testing against an
+  unmerged dev-container branch.
+- `package` builds `ci/smoke` inside the SDK image with zero setup and tars `/opt/umaa-cpp`.
+- `integration` proves the tarball standalone in the plain dev image.
+- `publish` (default branch / tags) uploads to the generic package registry as
+  `umaa-cpp-<tag-or-short-sha>.tar.gz`.
+
+Cross-project note: pulling the dev image with `CI_JOB_TOKEN` requires this project on the
+umaa-cyclone-cpp project's job-token allowlist (Settings → CI/CD → Job token permissions).

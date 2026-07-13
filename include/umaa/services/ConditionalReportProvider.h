@@ -194,5 +194,68 @@ class ConditionalReportProvider : private ConditionalReportProviderBase, private
   std::shared_ptr<ConditionalReportProviderIo> io_;
 };
 
+// Explicit specializations of getTopicAndWriter (defined in
+// ConditionalReportProvider.cpp) for every supported specialized conditional.
+// They must be declared here: a translation unit that uses one of these types
+// without seeing its declaration would silently instantiate the "unknown type"
+// primary template instead.
+template <>
+std::pair<std::string, std::shared_ptr<arlcore::io::SenderBase<UMAA::MM::Conditional::ConstraintViolatedConditionalType>>>
+ConditionalReportProvider::getTopicAndWriter(UMAA::MM::Conditional::ConstraintViolatedConditionalType cond);
+template <>
+std::pair<std::string, std::shared_ptr<arlcore::io::SenderBase<UMAA::MM::Conditional::DepthConditionalType>>>
+ConditionalReportProvider::getTopicAndWriter(UMAA::MM::Conditional::DepthConditionalType cond);
+template <>
+std::pair<std::string, std::shared_ptr<arlcore::io::SenderBase<UMAA::MM::Conditional::DepthRateConditionalType>>>
+ConditionalReportProvider::getTopicAndWriter(UMAA::MM::Conditional::DepthRateConditionalType cond);
+template <>
+std::pair<std::string, std::shared_ptr<arlcore::io::SenderBase<UMAA::MM::Conditional::EmitterPresetConditionalType>>>
+ConditionalReportProvider::getTopicAndWriter(UMAA::MM::Conditional::EmitterPresetConditionalType cond);
+template <>
+std::pair<std::string, std::shared_ptr<arlcore::io::SenderBase<UMAA::MM::Conditional::ExpConditionalType>>>
+ConditionalReportProvider::getTopicAndWriter(UMAA::MM::Conditional::ExpConditionalType cond);
+template <>
+std::pair<std::string, std::shared_ptr<arlcore::io::SenderBase<UMAA::MM::Conditional::HeadingSectorConditionalType>>>
+ConditionalReportProvider::getTopicAndWriter(UMAA::MM::Conditional::HeadingSectorConditionalType cond);
+template <>
+std::pair<std::string, std::shared_ptr<arlcore::io::SenderBase<UMAA::MM::Conditional::LogicalANDConditionalType>>>
+ConditionalReportProvider::getTopicAndWriter(UMAA::MM::Conditional::LogicalANDConditionalType cond);
+template <>
+std::pair<std::string, std::shared_ptr<arlcore::io::SenderBase<UMAA::MM::Conditional::LogicalNOTConditionalType>>>
+ConditionalReportProvider::getTopicAndWriter(UMAA::MM::Conditional::LogicalNOTConditionalType cond);
+template <>
+std::pair<std::string, std::shared_ptr<arlcore::io::SenderBase<UMAA::MM::Conditional::LogicalORConditionalType>>>
+ConditionalReportProvider::getTopicAndWriter(UMAA::MM::Conditional::LogicalORConditionalType cond);
+template <>
+std::pair<std::string, std::shared_ptr<arlcore::io::SenderBase<UMAA::MM::Conditional::MissionStateConditionalType>>>
+ConditionalReportProvider::getTopicAndWriter(UMAA::MM::Conditional::MissionStateConditionalType cond);
+template <>
+std::pair<std::string, std::shared_ptr<arlcore::io::SenderBase<UMAA::MM::Conditional::ObjectiveStateConditionalType>>>
+ConditionalReportProvider::getTopicAndWriter(UMAA::MM::Conditional::ObjectiveStateConditionalType cond);
+template <>
+std::pair<std::string, std::shared_ptr<arlcore::io::SenderBase<UMAA::MM::Conditional::PitchRateConditionalType>>>
+ConditionalReportProvider::getTopicAndWriter(UMAA::MM::Conditional::PitchRateConditionalType cond);
+template <>
+std::pair<std::string, std::shared_ptr<arlcore::io::SenderBase<UMAA::MM::Conditional::RelativeSpeedConditionalType>>>
+ConditionalReportProvider::getTopicAndWriter(UMAA::MM::Conditional::RelativeSpeedConditionalType cond);
+template <>
+std::pair<std::string, std::shared_ptr<arlcore::io::SenderBase<UMAA::MM::Conditional::RollRateConditionalType>>>
+ConditionalReportProvider::getTopicAndWriter(UMAA::MM::Conditional::RollRateConditionalType cond);
+template <>
+std::pair<std::string, std::shared_ptr<arlcore::io::SenderBase<UMAA::MM::Conditional::SpeedConditionalType>>>
+ConditionalReportProvider::getTopicAndWriter(UMAA::MM::Conditional::SpeedConditionalType cond);
+template <>
+std::pair<std::string, std::shared_ptr<arlcore::io::SenderBase<UMAA::MM::Conditional::TaskStateConditionalType>>>
+ConditionalReportProvider::getTopicAndWriter(UMAA::MM::Conditional::TaskStateConditionalType cond);
+template <>
+std::pair<std::string, std::shared_ptr<arlcore::io::SenderBase<UMAA::MM::Conditional::TimeConditionalType>>>
+ConditionalReportProvider::getTopicAndWriter(UMAA::MM::Conditional::TimeConditionalType cond);
+template <>
+std::pair<std::string, std::shared_ptr<arlcore::io::SenderBase<UMAA::MM::Conditional::WaterZoneConditionalType>>>
+ConditionalReportProvider::getTopicAndWriter(UMAA::MM::Conditional::WaterZoneConditionalType cond);
+template <>
+std::pair<std::string, std::shared_ptr<arlcore::io::SenderBase<UMAA::MM::Conditional::YawRateConditionalType>>>
+ConditionalReportProvider::getTopicAndWriter(UMAA::MM::Conditional::YawRateConditionalType cond);
+
 }  // namespace arlcore::umaa::conditional
 #endif  // INCLUDE_UMAA_SERVICES_CONDITIONALREPORTPROVIDER_H_
