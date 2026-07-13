@@ -596,6 +596,10 @@ TEST_F(ConditionalReportProviderTest, testRemoveSpecialization) {
   std::vector<ConditionalType> subsetConditionals = provider.getConditionals();
   std::vector<ConditionalType> difference;
 
+  // std::set_difference requires both ranges sorted by the comparator; the provider returns
+  // conditionals in container order, which is unrelated to ConditionalType's operator<.
+  std::sort(allConditionals.begin(), allConditionals.end());
+  std::sort(subsetConditionals.begin(), subsetConditionals.end());
   std::set_difference(allConditionals.begin(), allConditionals.end(), subsetConditionals.begin(), subsetConditionals.end(), std::back_inserter(difference));
   EXPECT_EQ(difference.size(), 1);
   EXPECT_EQ(difference.at(0), dcConditional.value());

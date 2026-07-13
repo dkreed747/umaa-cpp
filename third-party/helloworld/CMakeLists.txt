@@ -1,32 +1,25 @@
-project(hello-world-types LANGUAGES C CXX)
-cmake_minimum_required(VERSION 3.16)
+# Sample IDL type library used by the Cyclone DDS integration tests.
+# Added via add_subdirectory() from test/CMakeLists.txt.
+#
+# idlcxx_generate() creates an INTERFACE target that only carries the generated
+# .cpp/.hpp (it does not compile them). Generate here, then compile the sources
+# into a real library (same pattern as the umaa-cyclone-cpp types build).
 
 if(NOT TARGET CycloneDDS-CXX::ddscxx)
   find_package(CycloneDDS-CXX REQUIRED)
 endif()
 
-set(OUTPUT_FILES ${PROJECT_BINARY_DIR}/HelloWorldData.cpp ${PROJECT_BINARY_DIR}/HelloWorldData.hpp)
+idlcxx_generate(
+  TARGET helloworlddata_gen
+  FILES ${CMAKE_CURRENT_SOURCE_DIR}/HelloWorldData.idl
+  OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}
+  WARNINGS no-implicit-extensibility)
 
-# Generate header files at configure time 
-execute_process(COMMAND idlc -l cxx ${CMAKE_CURRENT_SOURCE_DIR}/HelloWorldData.idl -o ${PROJECT_BINARY_DIR}
-                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-)
+get_target_property(_gen_all helloworlddata_gen INTERFACE_SOURCES)
+set(_gen_cpp ${_gen_all})
+list(FILTER _gen_cpp INCLUDE REGEX "\\.cpp$")
 
-idlcxx_generate(TARGET helloworlddata 
-      FILES ${CMAKE_CURRENT_SOURCE_DIR}/HelloWorldData.idl 
-      WARNINGS no-implicit-extensibility
-      OUTPUT_DIR ${PROJECT_BINARY_DIR}
-)
-
-include_directories(
-    ${PROJECT_BINARY_DIR}
-)
-
-add_library(hello-world-types ${PROJECT_BINARY_DIR}/HelloWorldData.cpp ${PROJECT_BINARY_DIR}/HelloWorldData.hpp)
-
-# Link both executables to idl data type library and ddscxx.
-target_link_libraries(hello-world-types CycloneDDS-CXX::ddscxx helloworlddata)
-
-set_property(TARGET hello-world-types PROPERTY CXX_STANDARD 17)
-
-
+add_library(hello-world-types ${_gen_cpp})
+add_dependencies(hello-world-types helloworlddata_gen_generate)
+target_include_directories(hello-world-types PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(hello-world-types PUBLIC CycloneDDS-CXX::ddscxx)

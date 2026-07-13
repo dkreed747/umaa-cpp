@@ -237,16 +237,6 @@ bool ConditionalFactory::hasConflict(NumericGUID node, std::shared_ptr<std::map<
   return first || second;
 }
 
-template <class Derived, class Specialization>
-std::optional<std::shared_ptr<Derived>> ConditionalFactory::createConditional(const ConditionalType& base,
-    const Specialization& specialized,
-    const std::string& topic) {
-  if (ConditionalBase::isValidSpecialization<Specialization>(base, specialized, topic)) {
-    return std::make_shared<Derived>(base, specialized);
-  }
-  return std::nullopt;
-}
-
 std::optional<std::shared_ptr<ConstraintViolatedConditional>> ConditionalFactory::createConstraintViolatedConditional(
     const ConditionalType& base) {
   auto specialized = io_->ConstraintViolatedCache.getSpecialization<ConditionalType>(base);

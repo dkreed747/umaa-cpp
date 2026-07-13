@@ -285,28 +285,28 @@ class LargeSetWriter {
   //! \brief Returns a const iterator to the first SetElement of the LargeSet
   //!        If the LargeSet is empty, the returned iterator will be equal to \ref end()
   //! \return const iterator to the first SetElement
-  typename std::unordered_set<SetElement>::const_iterator begin() const noexcept {
+  typename std::unordered_set<SetElement, SetElementHasher<SetElement>>::const_iterator begin() const noexcept {
     return elements_.begin();
   }
 
   //! \brief Returns a const iterator to the first SetElement of the LargeSet
   //!        If the LargeSet is empty, the returned iterator will be equal to \ref cend()
   //! \return const iterator to the first SetElement
-  typename std::unordered_set<SetElement>::const_iterator cbegin() const noexcept {
+  typename std::unordered_set<SetElement, SetElementHasher<SetElement>>::const_iterator cbegin() const noexcept {
     return elements_.cbegin();
   }
 
   //! \brief Returns a const iterator to the element following the last SetElement of the LargeSet
   //!        This element acts as a placeholder; attempting to access it results in undefined behavior
   //! \return const iterator to the element following the last SetElement
-  typename std::unordered_set<SetElement>::const_iterator end() const noexcept {
+  typename std::unordered_set<SetElement, SetElementHasher<SetElement>>::const_iterator end() const noexcept {
     return elements_.end();
   }
 
   //! \brief Returns a const iterator to the element following the last SetElement of the LargeSet
   //!        This element acts as a placeholder; attempting to access it results in undefined behavior
   //! \return const iterator to the element following the last SetElement
-  typename std::unordered_set<SetElement>::const_iterator cend() const noexcept {
+  typename std::unordered_set<SetElement, SetElementHasher<SetElement>>::const_iterator cend() const noexcept {
     return elements_.cend();
   }
 

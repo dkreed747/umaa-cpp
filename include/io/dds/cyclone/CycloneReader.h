@@ -81,55 +81,60 @@ class CycloneReader : public ReaderBase<DataType> {
     }
 
     std::lock_guard<std::mutex> lock(readerLock_);
-    auto status = ReadStatus::NO_DATA;
-    // Takes only one sample
+    // Takes one sample at a time; filtered-out samples are skipped in place (no recursion, the
+    // lock is held for the whole call).
+    while (true) {
+      dds::sub::LoanedSamples<DataType> samples;
+      try {
+        samples = reader_.select().max_samples(1).take();
+      } catch(const std::exception& e) {
+        UMAA_LOG_ERROR(util::SYSTEM_LOGGER, e.what())
+        return ReadStatus::ERROR;
+      }
 
-    dds::sub::LoanedSamples<DataType> samples;
-    try {
-      samples = reader_.select().max_samples(1).take();
-    } catch(const std::exception& e) {
-      UMAA_LOG_ERROR(util::SYSTEM_LOGGER, e.what())
-      return ReadStatus::ERROR;
-    }
+      if (samples.length() == 0) {
+        return ReadStatus::NO_DATA;
+      }
 
-    if (samples.length() == 0) {
-      // ReadStatus::NO_DATA
+      const auto& sample = *(samples.begin());
+      DataType sampleData;
+      dds::sub::status::InstanceState instanceState = sample.info().state().instance_state();
+      bool instanceAlive = instanceState == dds::sub::status::InstanceState::alive();
+      bool validData = sample.info().valid();
+
+      if (instanceAlive || validData) {
+        sampleData = sample.data();
+      } else {
+        recoverKey(&sampleData, sample.info().instance_handle());
+      }
+
+      // Apply the manual filter only to valid data. Key-only samples (e.g. dispose
+      // notifications used for UMAA command cancellation) cannot carry non-key fields such
+      // as the command destination, so filtering them would silently drop cancellations.
+      if (validData) {
+        if (std::shared_ptr<ReaderFilter<DataType>> filter = this->manualFilter.lock();
+            filter != nullptr && !filter->filter(sampleData)) {
+          continue;
+        }
+      }
+
+      auto status = ReadStatus::NO_DATA;
+      if (instanceAlive || validData) {
+        *outSample = sampleData;
+        status = ReadStatus::SUCCESS;
+      } else if (instanceState == dds::sub::status::InstanceState::not_alive_disposed()) {
+        *outSample = sampleData;
+        status = ReadStatus::DISPOSED;
+      } else if (instanceState == dds::sub::status::InstanceState::not_alive_no_writers()) {
+        *outSample = sampleData;
+        status = ReadStatus::SUCCESS;
+      } else {
+        invalidSampleCount_++;
+        status = ReadStatus::INVALID_DATA;
+      }
+      readSampleCount_++;
       return status;
     }
-
-    const auto& sample = *(samples.begin());
-    DataType sampleData;
-    dds::sub::status::InstanceState instanceState = sample.info().state().instance_state();
-    bool instanceAlive = instanceState == dds::sub::status::InstanceState::alive();
-
-    if (instanceAlive || sample.info().valid()) {
-      sampleData = sample.data();
-    } else {
-      reader_.key_value(sampleData, sample.info().instance_handle());
-    }
-
-    if (std::shared_ptr<ReaderFilter<DataType>> filter = this->manualFilter.lock()) {
-      if (!filter->filter(sampleData)) {
-        readerLock_.unlock();
-        return read(outSample);
-      }
-    }
-
-    if (instanceAlive || sample.info().valid()) {
-      *outSample = sampleData;
-      status = ReadStatus::SUCCESS;
-    } else if (instanceState == dds::sub::status::InstanceState::not_alive_disposed()) {
-      *outSample = sampleData;
-      status = ReadStatus::DISPOSED;
-    } else if (instanceState == dds::sub::status::InstanceState::not_alive_no_writers()) {
-      *outSample = sampleData;
-      status = ReadStatus::SUCCESS;
-    } else {
-      invalidSampleCount_++;
-      status = ReadStatus::INVALID_DATA;
-    }
-    readSampleCount_++;
-    return status;
   }
 
   //! \brief Reads and points outSample to the latest sample read.
@@ -157,12 +162,16 @@ class CycloneReader : public ReaderBase<DataType> {
 
     // If filter is specified, begin filtering data. Otherwise, use the latest sample.
     if (std::shared_ptr<ReaderFilter<DataType>> filter = this->manualFilter.lock()) {
-      // Start on the latest element
-      for (auto sampleIter = std::prev(samples.end()); sampleIter >= samples.begin(); --sampleIter) {
-        latestSample = *sampleIter;
-        auto &dataToFilter = latestSample.data();
-        // Found a sample matching the filter
-        if (filter -> filter(dataToFilter)) {
+      // Walk newest to oldest; only valid samples carry the non-key fields a content filter
+      // inspects, so key-only (dispose) samples are skipped rather than dereferenced.
+      const int32_t count = static_cast<int32_t>(samples.length());
+      for (int32_t i = count - 1; i >= 0; --i) {
+        dds::sub::SampleRef<DataType> candidate = *(samples.begin() + i);
+        if (!candidate.info().valid()) {
+          continue;
+        }
+        if (filter->filter(candidate.data())) {
+          latestSample = candidate;
           hasSample = true;
           break;
         }
@@ -180,7 +189,7 @@ class CycloneReader : public ReaderBase<DataType> {
     if (instanceState == dds::sub::status::InstanceState::alive()) {
       sampleData = latestSample.data();
     } else {
-      reader_.key_value(sampleData, latestSample.info().instance_handle());
+      recoverKey(&sampleData, latestSample.info().instance_handle());
     }
 
     if (instanceState == dds::sub::status::InstanceState::alive()) {
@@ -241,52 +250,58 @@ class CycloneReader : public ReaderBase<DataType> {
     }
 
     std::lock_guard<std::mutex> lock(readerLock_);
-    dds::sub::LoanedSamples<DataType> samples;
-    try {
-      auto ih = reader_.lookup_instance(key);
-      samples = reader_.select().max_samples(1).instance(ih).take();
-    } catch (const std::exception& e) {
-      UMAA_LOG_ERROR(util::SYSTEM_LOGGER, e.what())
-      return ReadStatus::ERROR;
-    }
-
-    if (samples.length() == 0) {
-      return ReadStatus::NO_DATA;
-    }
-
-    const auto& sample = *(samples.begin());
-    DataType sampleData;
-    dds::sub::status::InstanceState instanceState = sample.info().state().instance_state();
-    bool instanceAlive = instanceState == dds::sub::status::InstanceState::alive();
-
-    if (instanceAlive || sample.info().valid()) {
-      sampleData = sample.data();
-    } else {
-      // Only sets the keyed fields in sampleData
-      reader_.key_value(sampleData, sample.info().instance_handle());
-    }
-
-    if (std::shared_ptr<ReaderFilter<DataType>> filter = this->manualFilter.lock()) {
-      if (!filter->filter(sampleData)) {
-        readerLock_.unlock();
-        return readInstance(sampleData, outSample);
+    // Filtered-out samples of the instance are skipped in place (no recursion, and the
+    // original lookup key is preserved).
+    while (true) {
+      dds::sub::LoanedSamples<DataType> samples;
+      try {
+        auto ih = reader_.lookup_instance(key);
+        samples = reader_.select().max_samples(1).instance(ih).take();
+      } catch (const std::exception& e) {
+        UMAA_LOG_ERROR(util::SYSTEM_LOGGER, e.what())
+        return ReadStatus::ERROR;
       }
-    }
 
-    auto status = ReadStatus::NO_DATA;
-    if (instanceAlive || sample.info().valid()) {
-      *outSample = sampleData;
-      status = ReadStatus::SUCCESS;
-    } else if (instanceState == dds::sub::status::InstanceState::not_alive_disposed() ||
-                instanceState == dds::sub::status::InstanceState::not_alive_no_writers()) {
-      *outSample = sampleData;
-      status = ReadStatus::DISPOSED;
-    } else {
-      invalidSampleCount_++;
-      status = ReadStatus::INVALID_DATA;
+      if (samples.length() == 0) {
+        return ReadStatus::NO_DATA;
+      }
+
+      const auto& sample = *(samples.begin());
+      DataType sampleData;
+      dds::sub::status::InstanceState instanceState = sample.info().state().instance_state();
+      bool instanceAlive = instanceState == dds::sub::status::InstanceState::alive();
+      bool validData = sample.info().valid();
+
+      if (instanceAlive || validData) {
+        sampleData = sample.data();
+      } else {
+        // Only sets the keyed fields in sampleData
+        recoverKey(&sampleData, sample.info().instance_handle());
+      }
+
+      // See read(): the manual filter only applies to valid data.
+      if (validData) {
+        if (std::shared_ptr<ReaderFilter<DataType>> filter = this->manualFilter.lock();
+            filter != nullptr && !filter->filter(sampleData)) {
+          continue;
+        }
+      }
+
+      auto status = ReadStatus::NO_DATA;
+      if (instanceAlive || validData) {
+        *outSample = sampleData;
+        status = ReadStatus::SUCCESS;
+      } else if (instanceState == dds::sub::status::InstanceState::not_alive_disposed() ||
+                  instanceState == dds::sub::status::InstanceState::not_alive_no_writers()) {
+        *outSample = sampleData;
+        status = ReadStatus::DISPOSED;
+      } else {
+        invalidSampleCount_++;
+        status = ReadStatus::INVALID_DATA;
+      }
+      readSampleCount_++;
+      return status;
     }
-    readSampleCount_++;
-    return status;
   }
 
   //! \brief Gets the Health Information for the DataReader.
@@ -306,6 +321,18 @@ class CycloneReader : public ReaderBase<DataType> {
   }
 
  private:
+  //! \brief Recover the keyed fields of a dispose/unregister notification into outSample.
+  //!        Keyless topics have no key to recover -- CycloneDDS rejects the lookup -- so the
+  //!        sample is left default-constructed instead of letting the exception escape the
+  //!        read path (which would abort the caller's polling thread).
+  void recoverKey(DataType* outSample, const dds::core::InstanceHandle& handle) {
+    try {
+      reader_.key_value(*outSample, handle);
+    } catch (const std::exception& e) {
+      UMAA_LOG_WARN(util::SYSTEM_LOGGER, "Could not recover key from dispose notification: " << e.what())
+    }
+  }
+
   dds::sub::DataReader<DataType> reader_ = dds::core::null;
   std::mutex readerLock_;
   int32_t invalidSampleCount_ = 0;

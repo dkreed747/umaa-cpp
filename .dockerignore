@@ -1,0 +1,11 @@
+build*/
+install/
+dist/
+stage/
+*.tar.gz
+.cache/
+.devcontainer/
+.vscode/
+.git/
+gcov-reports/
+testResults.txt

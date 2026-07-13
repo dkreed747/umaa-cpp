@@ -1,37 +1,39 @@
 # Configuration Directory
 
-The common config directory is the location that source config files are to be placed. The files will then be copied as a post build event to the binary source directory in projects that use umaa-sdk-common
+Source runtime configuration for umaa-cpp. The build copies these files into
+the build directory at configure time, and `cmake --install` ships them at
+`<prefix>/share/umaa-cpp/config/` (the SDK image carries them at
+`/opt/umaa-cpp/share/umaa-cpp/config/`).
 
-## Usage
+Projects that build the SDK as a submodule and want the configs next to their
+binaries can copy them the same way:
 
-  To use config files defined in rail common in your project, you need to copy the config directory to $CMAKE_BINARY_DIR.
-
-  To do this append this code to the CMakeLists.txt file for your project:
-
-  ```cmake
-  # Copy files in config directory to build directory
-  file(COPY ${CMAKE_CURRENT_LIST_DIR}/umaa-sdk-common/config/ DESTINATION ${CMAKE_BINARY_DIR})
-  # Make config files dependencies so cmake knows to recopy the files if they are edited
-  add_custom_target(copy_configs ALL DEPENDS ${CMAKE_BINARY_DIR})
-  ```
-
-  You will also need to add the library you want to create a dependency with the configs. To do so, use the following code and replace the name of the library with one in your project.
-
-  ```cmake
-  add_dependencies(<NAME_OF_LIBRARY> copy_configs)
-  ```
+```cmake
+# Copy files in config directory to build directory
+file(COPY ${CMAKE_CURRENT_LIST_DIR}/umaa-cpp/config/ DESTINATION ${CMAKE_BINARY_DIR})
+```
 
 ## Files
 
 - `log4cxx.xml`
 
-  This xml file stores our configuration preferences for the log4cxx logger. If this file is not present the logger will fallback on defaults defined in umaa-sdk-common/include/Logger.h.
-
+  Configuration preferences for the log4cxx logger. If this file is not
+  present in the working directory the logger falls back on defaults defined
+  in `include/Logger.h`.
 
 - `system-config.yml`
 
-  Unified configuration file for defining DDS variables, network properties, and vehicle specific configurations
+  Unified configuration file for defining DDS variables, network properties,
+  and vehicle specific configurations.
 
 - `CYCLONE_QOS_PROFILES.xml`
 
-  Defines the default qos profile that is used with applications that use DDS for communication
+  Defines the default QoS profile used by applications that use DDS for
+  communication.
+
+- `cyclonedds-loopback.xml`
+
+  CycloneDDS transport profile for single-host testing: binds to `lo`,
+  disables multicast, unicast discovery to localhost. Point `CYCLONEDDS_URI`
+  at it (`file://.../cyclonedds-loopback.xml`) — CI and the DDS tests use it
+  so DDS traffic never leaves the machine.
