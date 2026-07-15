@@ -49,6 +49,15 @@ bool ConditionalReportConsumer::cycle() {
   }
 
   auto conditionalSet = this->getSetFromMetadata(getReport()->conditionalsSetMetadata());
+  if (conditionalSet.status == arlcore::umaa::LargeSetStatus::EMPTY_SET) {
+    // An empty set is still a set change (e.g. every conditional deleted): observers such as
+    // active-constraints providers must hear about it or they would keep evaluating
+    // conditionals that no longer exist. Note EMPTY_SET carries a null set pointer.
+    conditionals_.reset();
+    conditionalObjects_ = std::vector<std::shared_ptr<ConditionalBase>>();
+    notify(conditionalObjects_.value());
+    return true;
+  }
   if (conditionalSet.status == arlcore::umaa::LargeSetStatus::INVALID_SET || conditionalSet.set.expired()) {
     return false;
   }
@@ -56,8 +65,6 @@ bool ConditionalReportConsumer::cycle() {
   if (auto conditionals = conditionalSet.set.lock()) {
     if (conditionals->empty()) {
       conditionals_.reset();
-      // An empty set is still a set change: observers (e.g. active-constraints providers) must hear about it
-      // or they would keep evaluating conditionals that no longer exist.
       conditionalObjects_ = std::vector<std::shared_ptr<ConditionalBase>>();
       notify(conditionalObjects_.value());
       return true;

@@ -479,4 +479,13 @@ TEST_F(StandingActiveConstraintsTest, standingSessionDeactivatesDeletedCondition
   ASSERT_TRUE(provider->getConstraintConditionals().has_value());
   ASSERT_EQ(provider->getConstraintConditionals()->size(), 1);
   EXPECT_EQ(provider->getConstraintConditionals()->at(0)->getConditionalId(), id0_);
+
+  // Deleting EVERY conditional (empty set) must still notify: the active set drains
+  setWriter_->remove(c0_);
+  setWriter_->remove(c1_);
+  sendReport(consumer);
+  EXPECT_TRUE(provider->cycle());
+  EXPECT_EQ(provider->getCommandStatus().value(), CommandStatusEnumType::EXECUTING);
+  ASSERT_TRUE(provider->getConstraintConditionals().has_value());
+  EXPECT_TRUE(provider->getConstraintConditionals()->empty());
 }
