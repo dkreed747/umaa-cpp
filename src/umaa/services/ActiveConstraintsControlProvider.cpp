@@ -19,9 +19,10 @@
 namespace arlcore::umaa::conditional {
 
 ActiveConstraintsControlProvider::ActiveConstraintsControlProvider(const NumericGuid& source,
-    std::shared_ptr<ActiveConstraintsControlProviderIo> io) :
+    std::shared_ptr<ActiveConstraintsControlProviderIo> io, bool standingSession) :
     ActiveConstraintsControlProviderBase(source, io),
-    Subject<std::vector<std::shared_ptr<ConditionalBase>>>(true) {}
+    Subject<std::vector<std::shared_ptr<ConditionalBase>>>(true),
+    standingSession_(standingSession) {}
 
 std::optional<std::vector<std::shared_ptr<ConditionalBase>>>
     ActiveConstraintsControlProvider::getConstraintConditionals() {
@@ -30,6 +31,17 @@ std::optional<std::vector<std::shared_ptr<ConditionalBase>>>
 
 void ActiveConstraintsControlProvider::update(const std::vector<std::shared_ptr<ConditionalBase>>& data) {
   conditionals_ = data;
+  conditionalsDirty_ = true;
+}
+
+ReadStatus ActiveConstraintsControlProvider::read(ActiveConstraintsCommandType* outCommand) {
+  ReadStatus status = ActiveConstraintsControlProviderBase::read(outCommand);
+  while (standingSession_ && status == ReadStatus::DISPOSED) {
+    UMAA_LOG_INFO(util::SYSTEM_LOGGER, "Ignoring disposed ActiveConstraints command; the standing session"
+      " keeps the applied constraint set")
+    status = ActiveConstraintsControlProviderBase::read(outCommand);
+  }
+  return status;
 }
 
 bool ActiveConstraintsControlProvider::isCommandValid(const ActiveConstraintsCommandType& cmd) {
@@ -41,6 +53,7 @@ bool ActiveConstraintsControlProvider::isCommandValid(const ActiveConstraintsCom
       return false;
     }
   }
+  lastReason_ = CommandStatusReasonEnumType::SUCCEEDED;
   return true;
 }
 
@@ -55,12 +68,17 @@ CommandStateResult ActiveConstraintsControlProvider::onCommanded(const std::weak
     return CommandStateResult::ERROR;
   }
   constraintConditionalIds_ = ids;
+  conditionalsDirty_ = true;
   return CommandStateResult::ADVANCE;
 }
 
 bool ActiveConstraintsControlProvider::isCommandCompleted(const std::weak_ptr<CmdSession> session) {
   std::vector<std::shared_ptr<ConditionalBase>> constraints;
   if (!conditionals_.has_value() || !constraintConditionalIds_.has_value()) {
+    return false;
+  }
+
+  if (standingSession_ && !conditionalsDirty_) {
     return false;
   }
 
@@ -76,15 +94,22 @@ bool ActiveConstraintsControlProvider::isCommandCompleted(const std::weak_ptr<Cm
   });
 
   if (!ids.empty()) {
-    UMAA_LOG_ERROR(util::SYSTEM_LOGGER, "Missing conditionals from set of active constraints")
-    lastReason_ = CommandStatusReasonEnumType::SERVICE_FAILED;
-    return false;
+    if (!standingSession_) {
+      UMAA_LOG_ERROR(util::SYSTEM_LOGGER, "Missing conditionals from set of active constraints")
+      lastReason_ = CommandStatusReasonEnumType::SERVICE_FAILED;
+      return false;
+    }
+    // The IDs stay latched: a conditional deleted while active is deactivated, and re-activates
+    // if it is re-added under the same ID (e.g. a commander editing an active constraint).
+    UMAA_LOG_WARN(util::SYSTEM_LOGGER, ids.size() << " active constraint conditional(s) missing from the"
+      " conditional report; deactivated until re-added")
   }
 
   constraintConditionals_ = constraints;
+  conditionalsDirty_ = false;
   this->notify(constraints);
 
-  return true;
+  return !standingSession_;
 }
 
 bool ActiveConstraintsControlProvider::conditionalExists(const NumericGuid& conditionalId) {
@@ -99,4 +124,3 @@ bool ActiveConstraintsControlProvider::conditionalExists(const NumericGuid& cond
 }
 
 }  // namespace arlcore::umaa::conditional
-

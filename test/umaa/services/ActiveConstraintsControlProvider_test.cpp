@@ -102,6 +102,9 @@ class ActiveConstraintsControlProviderTest : public ::testing::Test {
 
   void TearDown() override {
     factory_.reset();
+    activeConstraintsCommandReader_->clear();
+    activeConstraintsCommandAckReportReader_->clear();
+    activeConstraintsCommandStatusReader_->clear();
     reportReader_->clear();
     conditionalSetReader_->clear();
     constraintViolatedConditionalReader_->clear();
@@ -271,4 +274,209 @@ TEST_F(ActiveConstraintsControlProviderTest, getConstraintConditionals) {
   EXPECT_EQ(constraints->size(), 1);
   EXPECT_EQ(constraints->at(0)->getConditionalId(), id0);
   EXPECT_EQ(constraints->at(0)->getSpecializationId(), id0);
+}
+
+//! Shared setup for the standing-session tests: publishes a conditional report holding two depth/pitch-rate
+//! conditionals (id0/id1) and cycles the given consumer so both are resolvable.
+class StandingActiveConstraintsTest : public ActiveConstraintsControlProviderTest {
+ protected:
+  void publishConditionalSet(std::shared_ptr<arlcore::umaa::conditional::ConditionalReportConsumer> consumer) {
+    id0_ = arlcore::UuidFactory::getInstance().generateGuid();
+    id1_ = arlcore::UuidFactory::getInstance().generateGuid();
+    c0_.name("C0");
+    c1_.name("C1");
+    c0_.conditionalID(id0_.getGuid());
+    c1_.conditionalID(id1_.getGuid());
+    c0_.specializationID(id0_.getGuid());
+    c1_.specializationID(id1_.getGuid());
+    c0_.specializationTimestamp(UMAA::Common::Measurement::DateTime(0, 0));
+    c1_.specializationTimestamp(UMAA::Common::Measurement::DateTime(0, 0));
+    c0_.specializationTopic(UMAA::MM::Conditional::DepthConditionalTypeTopic);
+    c1_.specializationTopic(UMAA::MM::Conditional::PitchRateConditionalTypeTopic);
+    setWriter_ = std::make_unique<arlcore::umaa::LargeSetWriter<ConditionalType,
+      ConditionalReportTypeConditionalsSetElement>>(conditionalSetReader_);
+    setWriter_->insert(c0_);
+    setWriter_->insert(c1_);
+
+    UMAA::MM::Conditional::DepthConditionalType d0(ConditionalOperatorEnumType::GREATER_THAN, 10,
+      c0_.specializationTimestamp(), c0_.specializationID());
+    UMAA::MM::Conditional::PitchRateConditionalType p0(ConditionalOperatorEnumType::LESS_THAN, 10,
+      c1_.specializationTimestamp(), c1_.specializationID());
+    depthConditionalReader_->send(d0);
+    pitchRateConditionalReader_->send(p0);
+    conditionalIo_->DepthCache.update();
+    conditionalIo_->PitchRateCache.update();
+
+    sendReport(consumer);
+  }
+
+  void sendReport(std::shared_ptr<arlcore::umaa::conditional::ConditionalReportConsumer> consumer) {
+    ConditionalReportType report;
+    auto metadata = setWriter_->getMetadata();
+    report.conditionalsSetMetadata(metadata);
+    report.source().id(arlcore::NIL_GUID.getGuid());
+    // A removal resets the metadata's updateElementTimestamp, so stamp the report independently
+    report.timeStamp(arlcore::umaa::getTimestamp());
+    reportReader_->send(report);
+    consumer->cycle();
+  }
+
+  ActiveConstraintsCommandType makeCommand(const std::vector<arlcore::NumericGuid>& ids) {
+    ActiveConstraintsCommandType command;
+    for (const auto& id : ids) {
+      command.constraintConditionalIDs().push_back(id.getGuid());
+    }
+    command.sessionID(arlcore::UuidFactory::getInstance().generateGuid().getGuid());
+    return command;
+  }
+
+  //! Read command statuses, skipping DISPOSED instance samples, until a live status is found
+  std::optional<ActiveConstraintsCommandStatusType> nextLiveStatus() {
+    ActiveConstraintsCommandStatusType status;
+    ReadStatus read = activeConstraintsCommandStatusReader_->read(&status);
+    while (read == ReadStatus::DISPOSED) {
+      read = activeConstraintsCommandStatusReader_->read(&status);
+    }
+    if (read != ReadStatus::SUCCESS) {
+      return std::nullopt;
+    }
+    return status;
+  }
+
+  arlcore::NumericGuid id0_;
+  arlcore::NumericGuid id1_;
+  ConditionalType c0_;
+  ConditionalType c1_;
+  std::unique_ptr<arlcore::umaa::LargeSetWriter<ConditionalType,
+    ConditionalReportTypeConditionalsSetElement>> setWriter_;
+};
+
+TEST_F(StandingActiveConstraintsTest, standingSessionStaysExecutingAndSurvivesDispose) {
+  auto consumer = std::make_shared<arlcore::umaa::conditional::ConditionalReportConsumer>(reportReader_,
+    conditionalSetReader_, factory_);
+  NumericGuid source = arlcore::UuidFactory::getInstance().generateGuid();
+  auto provider = std::make_shared<arlcore::umaa::conditional::ActiveConstraintsControlProvider>(source,
+    constraintsIo_, true);
+  consumer->registerObserver(provider);
+  publishConditionalSet(consumer);
+
+  ActiveConstraintsCommandType command = makeCommand({id0_});
+  EXPECT_EQ(activeConstraintsCommandReader_->send(command), SendStatus::SUCCESS);
+  EXPECT_TRUE(provider->cycle());
+
+  // The session latches EXECUTING instead of completing
+  ASSERT_TRUE(provider->getCommandStatus().has_value());
+  EXPECT_EQ(provider->getCommandStatus().value(), CommandStatusEnumType::EXECUTING);
+  auto constraints = provider->getConstraintConditionals();
+  ASSERT_TRUE(constraints.has_value());
+  ASSERT_EQ(constraints->size(), 1);
+  EXPECT_EQ(constraints->at(0)->getConditionalId(), id0_);
+
+  // ... and stays there over subsequent cycles
+  EXPECT_TRUE(provider->cycle());
+  EXPECT_EQ(provider->getCommandStatus().value(), CommandStatusEnumType::EXECUTING);
+
+  // A commander restart autodisposes its command instance; the standing session must ignore it
+  EXPECT_EQ(activeConstraintsCommandReader_->dispose(command), SendStatus::SUCCESS);
+  EXPECT_TRUE(provider->cycle());
+  ASSERT_TRUE(provider->getCommandStatus().has_value());
+  EXPECT_EQ(provider->getCommandStatus().value(), CommandStatusEnumType::EXECUTING);
+  constraints = provider->getConstraintConditionals();
+  ASSERT_TRUE(constraints.has_value());
+  EXPECT_EQ(constraints->size(), 1);
+
+  // No CANCELED status was ever published
+  std::optional<ActiveConstraintsCommandStatusType> status = nextLiveStatus();
+  while (status.has_value()) {
+    EXPECT_NE(status->commandStatus(), CommandStatusEnumType::CANCELED);
+    status = nextLiveStatus();
+  }
+}
+
+TEST_F(StandingActiveConstraintsTest, standingSessionSupersededByNewCommand) {
+  auto consumer = std::make_shared<arlcore::umaa::conditional::ConditionalReportConsumer>(reportReader_,
+    conditionalSetReader_, factory_);
+  NumericGuid source = arlcore::UuidFactory::getInstance().generateGuid();
+  auto provider = std::make_shared<arlcore::umaa::conditional::ActiveConstraintsControlProvider>(source,
+    constraintsIo_, true);
+  consumer->registerObserver(provider);
+  publishConditionalSet(consumer);
+
+  ActiveConstraintsCommandType first = makeCommand({id0_});
+  EXPECT_EQ(activeConstraintsCommandReader_->send(first), SendStatus::SUCCESS);
+  EXPECT_TRUE(provider->cycle());
+  EXPECT_EQ(provider->getCommandStatus().value(), CommandStatusEnumType::EXECUTING);
+
+  // Drain the first session's statuses so only supersede traffic remains
+  while (nextLiveStatus().has_value()) {}
+
+  ActiveConstraintsCommandType second = makeCommand({id1_});
+  EXPECT_EQ(activeConstraintsCommandReader_->send(second), SendStatus::SUCCESS);
+  EXPECT_TRUE(provider->cycle());
+
+  // The new command supersedes: old session CANCELED, new session standing in EXECUTING
+  std::optional<ActiveConstraintsCommandStatusType> status = nextLiveStatus();
+  ASSERT_TRUE(status.has_value());
+  EXPECT_EQ(status->commandStatus(), CommandStatusEnumType::CANCELED);
+  EXPECT_EQ(NumericGuid(status->sessionID()), NumericGuid(first.sessionID()));
+
+  ASSERT_TRUE(provider->getCommandStatus().has_value());
+  EXPECT_EQ(provider->getCommandStatus().value(), CommandStatusEnumType::EXECUTING);
+  EXPECT_EQ(NumericGuid(provider->getActiveCommand()->sessionID()), NumericGuid(second.sessionID()));
+
+  auto constraints = provider->getConstraintConditionals();
+  ASSERT_TRUE(constraints.has_value());
+  ASSERT_EQ(constraints->size(), 1);
+  EXPECT_EQ(constraints->at(0)->getConditionalId(), id1_);
+
+  // Exactly one live ack remains, mirroring the applied command
+  ActiveConstraintsCommandAckReportType ack;
+  ReadStatus ackRead = activeConstraintsCommandAckReportReader_->read(&ack);
+  std::optional<ActiveConstraintsCommandAckReportType> lastLiveAck;
+  int liveAcks = 0;
+  while (ackRead != ReadStatus::NO_DATA) {
+    if (ackRead == ReadStatus::SUCCESS) {
+      lastLiveAck = ack;
+      ++liveAcks;
+    } else if (ackRead == ReadStatus::DISPOSED && lastLiveAck.has_value() &&
+        NumericGuid(ack.sessionID()) == NumericGuid(lastLiveAck->sessionID())) {
+      lastLiveAck.reset();
+      --liveAcks;
+    }
+    ackRead = activeConstraintsCommandAckReportReader_->read(&ack);
+  }
+  ASSERT_TRUE(lastLiveAck.has_value());
+  EXPECT_EQ(NumericGuid(lastLiveAck->sessionID()), NumericGuid(second.sessionID()));
+  EXPECT_EQ(lastLiveAck->command(), second);
+}
+
+TEST_F(StandingActiveConstraintsTest, standingSessionDeactivatesDeletedConditionalAndReactivatesOnReAdd) {
+  auto consumer = std::make_shared<arlcore::umaa::conditional::ConditionalReportConsumer>(reportReader_,
+    conditionalSetReader_, factory_);
+  NumericGuid source = arlcore::UuidFactory::getInstance().generateGuid();
+  auto provider = std::make_shared<arlcore::umaa::conditional::ActiveConstraintsControlProvider>(source,
+    constraintsIo_, true);
+  consumer->registerObserver(provider);
+  publishConditionalSet(consumer);
+
+  ActiveConstraintsCommandType command = makeCommand({id0_});
+  EXPECT_EQ(activeConstraintsCommandReader_->send(command), SendStatus::SUCCESS);
+  EXPECT_TRUE(provider->cycle());
+  ASSERT_EQ(provider->getConstraintConditionals()->size(), 1);
+
+  // The active conditional is deleted from the report: it deactivates, but the session stays EXECUTING
+  setWriter_->remove(c0_);
+  sendReport(consumer);
+  EXPECT_TRUE(provider->cycle());
+  EXPECT_EQ(provider->getCommandStatus().value(), CommandStatusEnumType::EXECUTING);
+  ASSERT_TRUE(provider->getConstraintConditionals().has_value());
+  EXPECT_TRUE(provider->getConstraintConditionals()->empty());
+
+  // Re-adding the conditional under the same ID re-activates it (commander edit flow)
+  setWriter_->insert(c0_);
+  sendReport(consumer);
+  EXPECT_TRUE(provider->cycle());
+  ASSERT_TRUE(provider->getConstraintConditionals().has_value());
+  ASSERT_EQ(provider->getConstraintConditionals()->size(), 1);
+  EXPECT_EQ(provider->getConstraintConditionals()->at(0)->getConditionalId(), id0_);
 }

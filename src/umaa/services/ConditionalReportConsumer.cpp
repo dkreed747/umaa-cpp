@@ -56,6 +56,10 @@ bool ConditionalReportConsumer::cycle() {
   if (auto conditionals = conditionalSet.set.lock()) {
     if (conditionals->empty()) {
       conditionals_.reset();
+      // An empty set is still a set change: observers (e.g. active-constraints providers) must hear about it
+      // or they would keep evaluating conditionals that no longer exist.
+      conditionalObjects_ = std::vector<std::shared_ptr<ConditionalBase>>();
+      notify(conditionalObjects_.value());
       return true;
     }
 
