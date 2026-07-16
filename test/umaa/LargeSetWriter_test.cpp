@@ -237,6 +237,33 @@ TEST_F(LargeSetWriterTest, remove) {
   EXPECT_EQ(keySample.elementID(), metadata.updateElementID());
 }
 
+TEST_F(LargeSetWriterTest, insertStampsElementTimestamp) {
+  // GIVEN: an empty set writer
+  // WHEN: a brand-new element is inserted
+  EXPECT_EQ(setWriter_->insert(objectives_[0]), arlcore::io::SendStatus::SUCCESS);
+
+  // THEN: the metadata update timestamp is stamped with a real time, not left at epoch
+  auto metadata = setWriter_->getMetadata();
+  ASSERT_TRUE(metadata.updateElementTimestamp().has_value());
+  EXPECT_TRUE(metadata.updateElementTimestamp().value() > DateTime(0, 0));
+}
+
+TEST_F(LargeSetWriterTest, insertAfterUpdateKeepsMetadataMonotonic) {
+  // GIVEN: a set whose last operation was an update, which stamps wall-clock time
+  EXPECT_EQ(setWriter_->insert(objectives_[0]), arlcore::io::SendStatus::SUCCESS);
+  EXPECT_EQ(setWriter_->update(objectives_[0], objectives_[1]), arlcore::io::SendStatus::SUCCESS);
+  auto updated = setWriter_->getMetadata().updateElementTimestamp();
+  ASSERT_TRUE(updated.has_value());
+
+  // WHEN: a brand-new element is inserted afterwards
+  EXPECT_EQ(setWriter_->insert(objectives_[2]), arlcore::io::SendStatus::SUCCESS);
+
+  // THEN: the metadata update timestamp does not go backwards, so consumers never see it as stale
+  auto inserted = setWriter_->getMetadata().updateElementTimestamp();
+  ASSERT_TRUE(inserted.has_value());
+  EXPECT_TRUE(inserted.value() >= updated.value());
+}
+
 TEST_F(LargeSetWriterTest, findSetElementIf) {
   EXPECT_EQ(setWriter_->insert(objectives_[0]), arlcore::io::SendStatus::SUCCESS);
   EXPECT_EQ(setWriter_->insert(objectives_[1]), arlcore::io::SendStatus::SUCCESS);

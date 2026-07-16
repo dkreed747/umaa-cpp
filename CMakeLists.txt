@@ -81,6 +81,8 @@ add_library(umaa-cpp
   src/umaa/TaskStateMachine.cpp
   src/umaa/conditionals/ConditionalFactory.cpp
   src/umaa/services/ActiveConstraintsControlProvider.cpp
+  src/umaa/services/ConditionalAddProvider.cpp
+  src/umaa/services/ConditionalDeleteProvider.cpp
   src/umaa/services/ConditionalReportConsumer.cpp
   src/umaa/services/ConditionalReportProvider.cpp
   src/umaa/objective-executors/core/ObjectiveStateMachine.cpp

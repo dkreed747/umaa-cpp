@@ -80,6 +80,8 @@ if(UMAA_CPP_BUILD_TESTS)
     umaa/domain/UmaaCommandStatus_test.cpp
     umaa/domain/UmaaCommandStatusBase_test.cpp
     umaa/services/ActiveConstraintsControlProvider_test.cpp
+    umaa/services/ConditionalAddProvider_test.cpp
+    umaa/services/ConditionalDeleteProvider_test.cpp
     umaa/services/ConditionalReportConsumer_test.cpp
     umaa/services/ConditionalReportProvider_test.cpp
     umaa/objective-executors/core/ObjectiveBaseTest.cpp

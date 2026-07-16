@@ -50,7 +50,17 @@ class ActiveConstraintsControlProvider :
     public Subject<std::vector<std::shared_ptr<ConditionalBase>>>,
     public Observer<std::vector<std::shared_ptr<ConditionalBase>>> {
  public:
-  ActiveConstraintsControlProvider(const NumericGuid& source, std::shared_ptr<ActiveConstraintsControlProviderIo> io);
+  //! \brief Constructor
+  //! \param source The source ID to receive commands for and sign session messages with
+  //! \param io Command provider io containing the command reader and ack/status writers
+  //! \param standingSession When true the accepted command session stays EXECUTING indefinitely: the applied
+  //! constraint set outlives the commander (a disposed command is ignored rather than treated as a cancel, so a
+  //! commander restart's writer autodispose cannot silently clear the set), a new command supersedes the standing
+  //! one (exactly one live ack mirrors the applied set), and active conditionals are re-resolved by ID on every
+  //! conditional set change (a deleted conditional is deactivated with a warning instead of failing the session,
+  //! and re-activates if re-added under the same ID)
+  ActiveConstraintsControlProvider(const NumericGuid& source, std::shared_ptr<ActiveConstraintsControlProviderIo> io,
+    bool standingSession = false);
 
   //! \brief Get a list of the currently active constraint conditionals if they exist
   //! \return An optional vector of shared pointers to conditional objects
@@ -69,6 +79,14 @@ class ActiveConstraintsControlProvider :
   std::optional<std::vector<std::shared_ptr<ConditionalBase>>> constraintConditionals_;
   std::optional<std::set<NumericGuid>> constraintConditionalIds_;
   CommandStatusReasonEnumType lastReason_ = CommandStatusReasonEnumType::SUCCEEDED;
+  bool standingSession_ = false;
+  bool conditionalsDirty_ = false;
+
+  //! @brief Overridden function to read incoming commands. In standing-session mode DISPOSED command samples are
+  //! swallowed so the standing session (and its applied constraint set) survives the commander's writer.
+  //! @param outCommand pointer to the command data to overwrite
+  //! @return ReadStatus enum
+  ReadStatus read(ActiveConstraintsCommandType* outCommand) override;
 
   //! @brief Overridden function for logic that runs when the active command reaches the `COMMANDED` state
   //! @return Whether the custom logic completed successfully
