@@ -535,6 +535,45 @@ TEST_F(ConditionalReportProviderTest, testSendReport) {
   }
 }
 
+TEST_F(ConditionalReportProviderTest, testAddAfterUpdateKeepsReportMetadataFresh) {
+  // GIVEN: a consumer tracking the report set across an edit of an existing conditional
+  arlcore::umaa::conditional::ConditionalReportProvider provider(arlcore::NIL_GUID, io_);
+  arlcore::umaa::LargeSetReader<ConditionalType, ConditionalReportTypeConditionalsSetElement> reader(conditionalSetWriter_);
+
+  ConditionalType first;
+  first.conditionalID(arlcore::UuidFactory::getInstance().generateGuid().getGuid());
+  first.specializationID(arlcore::UuidFactory::getInstance().generateGuid().getGuid());
+  first.specializationTopic(UMAA::MM::Conditional::DepthConditionalTypeTopic);
+  EXPECT_EQ(provider.addConditional(first), SendStatus::SUCCESS);
+
+  first.specializationID(arlcore::UuidFactory::getInstance().generateGuid().getGuid());
+  EXPECT_EQ(provider.updateConditional(first), SendStatus::SUCCESS);
+
+  provider.sendReport();
+  ConditionalReportType report;
+  EXPECT_EQ(reportWriter_->read(&report), arlcore::io::ReadStatus::SUCCESS);
+  ASSERT_EQ(reader.getSetFromMetadata(report.conditionalsSetMetadata()).status,
+            arlcore::umaa::LargeSetStatus::VALID_SET);
+
+  // WHEN: a brand-new conditional is added and reported afterwards
+  ConditionalType second;
+  second.conditionalID(arlcore::UuidFactory::getInstance().generateGuid().getGuid());
+  second.specializationID(arlcore::UuidFactory::getInstance().generateGuid().getGuid());
+  second.specializationTopic(UMAA::MM::Conditional::DepthConditionalTypeTopic);
+  EXPECT_EQ(provider.addConditional(second), SendStatus::SUCCESS);
+  provider.sendReport();
+  EXPECT_EQ(reportWriter_->read(&report), arlcore::io::ReadStatus::SUCCESS);
+
+  // THEN: the consumer accepts the newer metadata instead of rejecting it as stale
+  auto result = reader.getSetFromMetadata(report.conditionalsSetMetadata());
+  ASSERT_EQ(result.status, arlcore::umaa::LargeSetStatus::VALID_SET);
+  if (auto set = result.set.lock()) {
+    EXPECT_EQ(set->size(), 2);
+  } else {
+    FAIL() << "Unable to acquire lock";
+  }
+}
+
 TEST_F(ConditionalReportProviderTest, testRemoveConditional) {
   arlcore::umaa::conditional::ConditionalReportProvider provider(arlcore::NIL_GUID, io_);
 

@@ -58,7 +58,8 @@ bool ConditionalReportConsumer::cycle() {
     notify(conditionalObjects_.value());
     return true;
   }
-  if (conditionalSet.status == arlcore::umaa::LargeSetStatus::INVALID_SET || conditionalSet.set.expired()) {
+  if (conditionalSet.status == arlcore::umaa::LargeSetStatus::INVALID_SET ||
+      conditionalSet.status == arlcore::umaa::LargeSetStatus::STALE_METADATA || conditionalSet.set.expired()) {
     return false;
   }
 

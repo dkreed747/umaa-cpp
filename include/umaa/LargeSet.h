@@ -32,7 +32,7 @@ namespace arlcore::umaa {
 using UMAA::Common::LargeSetMetadata;
 using UMAA::Common::Measurement::DateTime;
 
-enum class LargeSetStatus { VALID_SET, EMPTY_SET, INVALID_SET };
+enum class LargeSetStatus { VALID_SET, EMPTY_SET, INVALID_SET, STALE_METADATA };
 
 //! \brief A structure to hold the status of a set and a pointer to the result
 //! \tparam Element The type of the elements contained in the set
@@ -119,7 +119,7 @@ class LargeSet {
       cached_set_ = ElementSetPtr(nullptr);
     } else {
       UMAA_LOG_WARN(util::getLogger(), "Received metadata that is older than the current latest metadata");
-      result.status = LargeSetStatus::INVALID_SET;
+      result.status = LargeSetStatus::STALE_METADATA;
       return result;
     }
     return generateSet();

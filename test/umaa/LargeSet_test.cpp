@@ -270,6 +270,32 @@ TEST_F(LargeSetTest, disposeSetElement) {
   }
 }
 
+TEST_F(LargeSetTest, staleMetadata) {
+  // GIVEN: a set whose latest accepted metadata carries a real timestamp
+  ObjectiveSetElement e = initializeSetElement(metadata_, objectives_[0]);
+  e.elementTimestamp(DateTime(100, 0));
+  metadata_.updateElementTimestamp(e.elementTimestamp());
+  EXPECT_TRUE(set_->receive(e));
+  auto result = set_->receive(metadata_);
+  ASSERT_EQ(result.status, arlcore::umaa::LargeSetStatus::VALID_SET);
+
+  // WHEN: metadata with an older timestamp arrives repeatedly (a consumer re-deriving every poll)
+  LargeSetMetadata stale = metadata_;
+  stale.updateElementTimestamp(DateTime(50, 0));
+  result = set_->receive(stale);
+
+  // THEN: it is flagged STALE_METADATA (distinguishable from a retryable INVALID_SET) every time
+  EXPECT_EQ(result.status, arlcore::umaa::LargeSetStatus::STALE_METADATA);
+  EXPECT_TRUE(result.set.expired());
+  result = set_->receive(stale);
+  EXPECT_EQ(result.status, arlcore::umaa::LargeSetStatus::STALE_METADATA);
+
+  // and the retained latest metadata still accepts newer metadata afterwards
+  metadata_.updateElementTimestamp(DateTime(200, 0));
+  result = set_->receive(metadata_);
+  EXPECT_EQ(result.status, arlcore::umaa::LargeSetStatus::VALID_SET);
+}
+
 TEST_F(LargeSetTest, setCache) {
   ObjectiveSetElement setElement[3];
   setElement[0] = initializeSetElement(metadata_, objectives_[0]);

@@ -354,6 +354,7 @@ class LargeSetWriter {
     e.element(value);
     e.setID(setId_.getGuid());
     e.elementID(newElementId);
+    e.elementTimestamp(getTimestamp());
     return e;
   }
 };
