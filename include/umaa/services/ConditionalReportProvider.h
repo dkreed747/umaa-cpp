@@ -47,7 +47,9 @@ class ConditionalReportProvider : private ConditionalReportProviderBase, private
   //! \brief Constructor
   //! \param sourceId The source ID to sign all report samples with
   //! \param io Shared pointer to the object containing the group of readers and writers required
-  ConditionalReportProvider(const NumericGuid& sourceId, std::shared_ptr<ConditionalReportProviderIo> io);
+  //! \param parentId The platform this conditional service runs on, stamped as source.parentID
+  ConditionalReportProvider(const NumericGuid& sourceId, std::shared_ptr<ConditionalReportProviderIo> io,
+                            const NumericGuid& parentId = NumericGuid());
 
   //! \brief Send the current working conditional report to consumers
   //! \return Status from sending the report
