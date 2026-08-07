@@ -62,9 +62,10 @@ namespace arlcore::umaa::conditional {
 
 ConditionalReportProvider::ConditionalReportProvider(
   const NumericGuid& sourceId,
-  std::shared_ptr<ConditionalReportProviderIo> io)
+  std::shared_ptr<ConditionalReportProviderIo> io,
+  const NumericGuid& parentId)
   : sourceId_(sourceId),
-  ConditionalReportProviderBase(sourceId, io->ReportWriter),
+  ConditionalReportProviderBase(sourceId, io->ReportWriter, parentId),
   ConditionalLargeSetWriterBase(io->ReportSetElementWriter),
   io_(io) {
 }
